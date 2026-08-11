@@ -99,6 +99,7 @@ private slots:
     void alreadySelectedManualSelectionAvoidsWrite();
     void failedManualWriteKeepsOldSnapshot();
     void partialErrorsRetainSuccessfulInstancesAndSelection();
+    void failedAutomaticRepairRemainsUsableAndRetriesOnRescan();
     void preservesScannerOrderAcrossSuccessiveRescans();
 };
 
@@ -276,6 +277,47 @@ void InstanceRegistryTest::partialErrorsRetainSuccessfulInstancesAndSelection()
     QCOMPARE(snapshot.selectedId, native.id);
     QCOMPARE(snapshot.failedBackends,
              QStringList({QStringLiteral("flatpak"), QStringLiteral("snap")}));
+}
+
+void InstanceRegistryTest::failedAutomaticRepairRemainsUsableAndRetriesOnRescan()
+{
+    const QString staleId = QStringLiteral("native:/removed/remmina");
+    const RemminaInstance flatpak = makeInstance(
+        QStringLiteral("flatpak:user:org.remmina.Remmina/x86_64/stable"),
+        InstanceKind::Flatpak);
+    const InstanceScanResult scanResult{
+        .instances = {flatpak},
+        .failedBackends = {QStringLiteral("snap")},
+    };
+    FakeScanSource source({scanResult, scanResult});
+    FakeSelectionStore store(staleId);
+    store.writeSucceeds = false;
+    InstanceRegistry registry(source, store);
+
+    const RegistrySnapshot first = registry.rescanAndRepair();
+    const RegistrySnapshot currentAfterFailure = registry.snapshot();
+
+    QCOMPARE(instanceIds(first.instances), QStringList{flatpak.id});
+    QCOMPARE(first.selectedId, flatpak.id);
+    QCOMPARE(first.failedBackends, QStringList{QStringLiteral("snap")});
+    QCOMPARE(instanceIds(currentAfterFailure.instances), QStringList{flatpak.id});
+    QCOMPARE(currentAfterFailure.selectedId, flatpak.id);
+    QCOMPARE(currentAfterFailure.failedBackends, QStringList{QStringLiteral("snap")});
+    QCOMPARE(store.persistedId, staleId);
+    QCOMPARE(store.writes, QStringList{flatpak.id});
+    QCOMPARE(source.scanCount, 1);
+    QCOMPARE(store.readCount, 1);
+
+    store.writeSucceeds = true;
+    const RegistrySnapshot second = registry.rescanAndRepair();
+
+    QCOMPARE(instanceIds(second.instances), QStringList{flatpak.id});
+    QCOMPARE(second.selectedId, flatpak.id);
+    QCOMPARE(second.failedBackends, QStringList{QStringLiteral("snap")});
+    QCOMPARE(store.persistedId, flatpak.id);
+    QCOMPARE(store.writes, QStringList({flatpak.id, flatpak.id}));
+    QCOMPARE(source.scanCount, 2);
+    QCOMPARE(store.readCount, 2);
 }
 
 void InstanceRegistryTest::preservesScannerOrderAcrossSuccessiveRescans()
