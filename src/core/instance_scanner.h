@@ -23,10 +23,16 @@ struct InstanceScanResult {
     QStringList failedBackends;
 };
 
-class InstanceScanner {
+class InstanceScanSource {
+public:
+    virtual ~InstanceScanSource() = default;
+    [[nodiscard]] virtual InstanceScanResult scan() const = 0;
+};
+
+class InstanceScanner final : public InstanceScanSource {
 public:
     InstanceScanner(ProcessProbe &probe, ScanEnvironment environment);
-    [[nodiscard]] InstanceScanResult scan() const;
+    [[nodiscard]] InstanceScanResult scan() const override;
 
 private:
     ProcessProbe &probe_;

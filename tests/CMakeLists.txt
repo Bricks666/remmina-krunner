@@ -21,10 +21,22 @@ target_link_libraries(test_selection_policy PRIVATE remmina_krunner_core Qt6::Te
 
 add_test(NAME selection_policy COMMAND test_selection_policy)
 
+add_executable(test_selection_store test_selection_store.cpp)
+target_link_libraries(test_selection_store
+    PRIVATE remmina_krunner_core KF6::ConfigCore Qt6::Test
+)
+
+add_test(NAME selection_store COMMAND test_selection_store)
+
 add_executable(test_instance_scanner test_instance_scanner.cpp)
 target_link_libraries(test_instance_scanner PRIVATE remmina_krunner_core Qt6::Test)
 
 add_test(NAME instance_scanner COMMAND test_instance_scanner)
+
+add_executable(test_instance_registry test_instance_registry.cpp)
+target_link_libraries(test_instance_registry PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME instance_registry COMMAND test_instance_registry)
 
 add_executable(process_probe_helper process_probe_helper.cpp)
 
