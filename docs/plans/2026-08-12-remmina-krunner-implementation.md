@@ -318,6 +318,7 @@ struct ScanEnvironment {
     QString flatpakExecutable;
     QString snapLauncher;
     QString userHome;
+    QString snapMountRoot = QStringLiteral("/snap");
 };
 
 struct InstanceScanResult {
@@ -333,8 +334,10 @@ public:
 ```
 
 Use `QTemporaryDir` to create executable `remmina` fixtures. Test PATH order,
-non-executable rejection, canonical deduplication, paths with spaces, and
-exclusion when the canonical path belongs to `/snap`.
+non-executable rejection, canonical deduplication while preserving the first
+clean absolute lexical launcher, stable identity across symlink retargets,
+paths with spaces, and exclusion when the canonical path belongs to the
+injected Snap mount root.
 
 **Step 2: Write failing Flatpak and Snap tests**
 
@@ -349,8 +352,8 @@ malformed lines, duplicate refs, deterministic order, command timeout, and
 Flatpak failure alongside successful native results.
 
 Test an executable Snap launcher, missing launcher, canonical launcher, and a
-Snap failure that does not remove other results. Stable IDs must omit Flatpak
-commit and Snap revision.
+Snap failure that does not remove other results. Stable IDs must omit native
+symlink targets, Flatpak commits, and Snap revisions.
 
 Run `./scripts/container.sh test instance_scanner`; expect failure.
 
@@ -366,7 +369,10 @@ struct ProbeResult {
 ```
 
 `QtProcessProbe` uses `QProcess`, a fixed timeout, a fixed maximum output size,
-discarded stderr, and no shell. Build profile environments as follows:
+discarded stderr, and no shell. It runs only on the `QCoreApplication` thread
+before shutdown; the main event loop must resume afterward so deferred reaping
+can complete in the pathological case where a killed child exceeds the bounded
+reaping grace period. Build profile environments as follows:
 
 - native: current host XDG homes;
 - Flatpak: `~/.var/app/org.remmina.Remmina/config` and `data`;

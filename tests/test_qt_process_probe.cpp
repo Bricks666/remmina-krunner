@@ -5,10 +5,13 @@
 
 #include "platform/qt_process_probe.h"
 
+#include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QTemporaryDir>
+#include <QThread>
 
 namespace {
 
@@ -35,9 +38,12 @@ class QtProcessProbeTest : public QObject {
 
 private slots:
     void preservesArgumentsWithoutShellParsing();
+    void rejectsWorkerThreadWithoutSpawning();
     void discardsStderrWithoutDeadlocking();
     void classifiesStartExitAndCrashFailures();
     void killsTimedOutProcesses();
+    void acceptsOutputAtExactLimit();
+    void rejectsFirstBytePastLimitBeforeExit();
     void capsOversizedStandardOutput();
 };
 
@@ -52,6 +58,31 @@ void QtProcessProbeTest::preservesArgumentsWithoutShellParsing()
 
     QCOMPARE(result.status, ProbeResult::Status::Success);
     QCOMPARE(result.standardOutput, inertArgument.toUtf8());
+}
+
+void QtProcessProbeTest::rejectsWorkerThreadWithoutSpawning()
+{
+    QTemporaryDir temporaryDirectory;
+    QVERIFY(temporaryDirectory.isValid());
+    const QString markerPath =
+        QDir(temporaryDirectory.path()).filePath(QStringLiteral("spawned.marker"));
+    ProbeResult workerResult{
+        .status = ProbeResult::Status::Success,
+        .standardOutput = QByteArray("not updated"),
+    };
+    QThread *worker = QThread::create([&workerResult, &markerPath] {
+        QtProcessProbe probe;
+        workerResult = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH),
+                                 {QStringLiteral("mark"), markerPath});
+    });
+
+    worker->start();
+    QVERIFY(worker->wait(QtProcessProbe::timeoutMilliseconds + 1000));
+    delete worker;
+
+    QCOMPARE(workerResult.status, ProbeResult::Status::Failed);
+    QVERIFY(workerResult.standardOutput.isEmpty());
+    QVERIFY(!QFileInfo::exists(markerPath));
 }
 
 void QtProcessProbeTest::discardsStderrWithoutDeadlocking()
@@ -97,6 +128,31 @@ void QtProcessProbeTest::killsTimedOutProcesses()
     verifyProcessWasReaped(pidFile);
 }
 
+void QtProcessProbeTest::acceptsOutputAtExactLimit()
+{
+    QtProcessProbe probe;
+
+    const ProbeResult result = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH),
+                                         {QStringLiteral("exact-limit")});
+
+    QCOMPARE(result.status, ProbeResult::Status::Success);
+    QCOMPARE(result.standardOutput.size(), QtProcessProbe::maximumStandardOutputBytes);
+}
+
+void QtProcessProbeTest::rejectsFirstBytePastLimitBeforeExit()
+{
+    QtProcessProbe probe;
+    QElapsedTimer elapsed;
+    elapsed.start();
+
+    const ProbeResult result = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH),
+                                         {QStringLiteral("limit-plus-one")});
+
+    QCOMPARE(result.status, ProbeResult::Status::OutputTooLarge);
+    QVERIFY(result.standardOutput.isEmpty());
+    QVERIFY(elapsed.elapsed() < QtProcessProbe::timeoutMilliseconds);
+}
+
 void QtProcessProbeTest::capsOversizedStandardOutput()
 {
     QTemporaryDir temporaryDirectory;
@@ -113,6 +169,11 @@ void QtProcessProbeTest::capsOversizedStandardOutput()
     verifyProcessWasReaped(pidFile);
 }
 
-QTEST_APPLESS_MAIN(QtProcessProbeTest)
+int main(int argc, char **argv)
+{
+    QCoreApplication application(argc, argv);
+    QtProcessProbeTest test;
+    return QTest::qExec(&test, argc, argv);
+}
 
 #include "test_qt_process_probe.moc"

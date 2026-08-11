@@ -95,9 +95,11 @@ The scanner discovers applications, never profiles:
 ### Native
 
 Enumerate every executable named `remmina` in every `PATH` directory. Resolve
-canonical paths, remove duplicates, and exclude Snap launcher/canonical paths
-so the same Snap is not also reported as native. Native instances retain PATH
-order and use the canonical executable path as part of their stable identity.
+canonical paths only to validate executables, remove duplicates, and classify
+Snap targets so the same Snap is not also reported as native. Native instances
+retain PATH order and use the first clean absolute lexical launcher path for
+launch and stable identity, so retargeting a versioned symlink during an update
+does not discard the selection.
 
 ### Flatpak
 
@@ -364,8 +366,8 @@ configuration, clock, watcher, notifier, and launcher boundaries:
 
 ### Instance discovery
 
-- multiple native executables, PATH ordering, canonical deduplication, and
-  Snap exclusion;
+- multiple native executables, PATH ordering, stable lexical launchers across
+  symlink retargets, canonical deduplication, and Snap exclusion;
 - user and named-system Flatpak installations;
 - Snap discovery;
 - stable identities across application updates;

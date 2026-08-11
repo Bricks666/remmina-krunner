@@ -86,11 +86,13 @@ private slots:
     void discoversNativeExecutablesInPathOrderWithSpaces();
     void rejectsInvalidNativeCandidates();
     void deduplicatesNativeCanonicalPaths();
+    void keepsNativeLauncherIdentityAcrossSymlinkRetarget();
     void excludesSnapLauncherAliasesWithoutSubstringGuessing();
     void excludesDistinctNativeAliasToSnapCanonicalTarget();
     void excludesOnlyExecutablesUnderSnapMountRoot();
     void discoversFlatpakInstallationsInDeterministicOrder();
     void filtersMalformedAndDuplicateFlatpakRows();
+    void rejectsUnsafeFlatpakFields();
     void treatsMissingFlatpakAsUnavailable();
     void isolatesEveryFlatpakProbeFailure();
     void discoversSnapThroughRefreshStableLauncher();
@@ -189,7 +191,47 @@ void InstanceScannerTest::deduplicatesNativeCanonicalPaths()
         instancesOfKind(scanner.scan(), InstanceKind::Native);
 
     QCOMPARE(nativeInstances.size(), 1);
-    QCOMPARE(nativeInstances.constFirst().executable, QFileInfo(executable).canonicalFilePath());
+    QCOMPARE(nativeInstances.constFirst().executable,
+             QDir::cleanPath(QFileInfo(QDir(aliasDirectory).filePath(QStringLiteral("remmina")))
+                                 .absoluteFilePath()));
+}
+
+void InstanceScannerTest::keepsNativeLauncherIdentityAcrossSymlinkRetarget()
+{
+    QTemporaryDir temporaryDirectory;
+    QVERIFY(temporaryDirectory.isValid());
+    const QDir root(temporaryDirectory.path());
+    const QString version1 = createExecutable(root.filePath(QStringLiteral("versions/1")));
+    const QString version2 = createExecutable(root.filePath(QStringLiteral("versions/2")));
+    const QString launcherDirectory = root.filePath(QStringLiteral("bin"));
+    const QString launcher = QDir(launcherDirectory).filePath(QStringLiteral("remmina"));
+    QVERIFY(!version1.isEmpty());
+    QVERIFY(!version2.isEmpty());
+    QVERIFY(QDir{}.mkpath(launcherDirectory));
+    QVERIFY(QFile::link(version1, launcher));
+    const QString version1Canonical = QFileInfo(launcher).canonicalFilePath();
+
+    RecordingProcessProbe firstProbe;
+    const QList<RemminaInstance> firstInstances = instancesOfKind(
+        InstanceScanner(firstProbe, nativeEnvironment({launcherDirectory})).scan(),
+        InstanceKind::Native);
+    QCOMPARE(firstInstances.size(), 1);
+    const QString lexicalLauncher = QDir::cleanPath(QFileInfo(launcher).absoluteFilePath());
+    QCOMPARE(firstInstances.constFirst().id, QStringLiteral("native:") + lexicalLauncher);
+    QCOMPARE(firstInstances.constFirst().executable, lexicalLauncher);
+
+    QVERIFY(QFile::remove(launcher));
+    QVERIFY(QFile::link(version2, launcher));
+    QVERIFY(QFileInfo(launcher).canonicalFilePath() != version1Canonical);
+    RecordingProcessProbe refreshedProbe;
+    const QList<RemminaInstance> refreshedInstances = instancesOfKind(
+        InstanceScanner(refreshedProbe, nativeEnvironment({launcherDirectory})).scan(),
+        InstanceKind::Native);
+
+    QCOMPARE(refreshedInstances.size(), 1);
+    QCOMPARE(refreshedInstances.constFirst().id, firstInstances.constFirst().id);
+    QCOMPARE(refreshedInstances.constFirst().executable,
+             firstInstances.constFirst().executable);
 }
 
 void InstanceScannerTest::excludesSnapLauncherAliasesWithoutSubstringGuessing()
@@ -382,6 +424,42 @@ void InstanceScannerTest::filtersMalformedAndDuplicateFlatpakRows()
 
     const QList<RemminaInstance> flatpakInstances =
         instancesOfKind(scanner.scan(), InstanceKind::Flatpak);
+
+    QCOMPARE(flatpakInstances.size(), 1);
+    QCOMPARE(flatpakInstances.constFirst().id,
+             QStringLiteral("flatpak:user:org.remmina.Remmina/x86_64/stable"));
+    QVERIFY(probe.expectationsMet());
+}
+
+void InstanceScannerTest::rejectsUnsafeFlatpakFields()
+{
+    QTemporaryDir temporaryDirectory;
+    QVERIFY(temporaryDirectory.isValid());
+    const QString flatpakExecutable =
+        createExecutable(temporaryDirectory.path(), QStringLiteral("flatpak"));
+    QVERIFY(!flatpakExecutable.isEmpty());
+
+    QByteArray output(
+        "org.remmina.Remmina\torg.remmina.Remmina/x86_64/stable\tuser\n");
+    output.append("org.remmina.Remmina\torg.remmina.Remmina/x86_64/stable\tbad");
+    output.append(char(0xff));
+    output.append('\n');
+    output.append("org.remmina.Remmina\torg.remmina.Remmina/x86_64/stable");
+    output.append(char(0));
+    output.append("suffix\tuser\n");
+    output.append("org.remmina.Remmina\torg.remmina.Remmina/x86_64/stable\tbad");
+    output.append(char(0x01));
+    output.append("control\n");
+
+    RecordingProcessProbe probe;
+    probe.expect(QFileInfo(flatpakExecutable).canonicalFilePath(),
+                 flatpakListArguments(),
+                 {.status = ProbeResult::Status::Success, .standardOutput = output});
+    ScanEnvironment environment = nativeEnvironment({});
+    environment.flatpakExecutable = flatpakExecutable;
+
+    const QList<RemminaInstance> flatpakInstances = instancesOfKind(
+        InstanceScanner(probe, std::move(environment)).scan(), InstanceKind::Flatpak);
 
     QCOMPARE(flatpakInstances.size(), 1);
     QCOMPARE(flatpakInstances.constFirst().id,

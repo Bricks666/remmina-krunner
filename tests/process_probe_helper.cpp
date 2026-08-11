@@ -35,6 +35,9 @@ int main(int argc, char **argv)
         std::cout << argv[2];
         return 0;
     }
+    if (mode == "mark") {
+        return argc == 3 && writePidFile(argv[2]) ? 0 : 65;
+    }
     if (mode == "stderr-flood") {
         for (int index = 0; index < 256 * 1024; ++index) {
             std::cerr.put('e');
@@ -55,6 +58,20 @@ int main(int argc, char **argv)
         std::this_thread::sleep_for(std::chrono::seconds(10));
         return 0;
     }
+    if (mode == "exact-limit") {
+        for (int index = 0; index < 64 * 1024; ++index) {
+            std::cout.put('e');
+        }
+        return 0;
+    }
+    if (mode == "limit-plus-one") {
+        for (int index = 0; index < 64 * 1024 + 1; ++index) {
+            std::cout.put('p');
+        }
+        std::cout.flush();
+        std::this_thread::sleep_for(std::chrono::seconds(10));
+        return 0;
+    }
     if (mode == "oversize") {
         if (argc != 3 || !writePidFile(argv[2])) {
             return 65;
@@ -62,6 +79,8 @@ int main(int argc, char **argv)
         for (int index = 0; index < 256 * 1024; ++index) {
             std::cout.put('o');
         }
+        std::cout.flush();
+        std::this_thread::sleep_for(std::chrono::seconds(10));
         return 0;
     }
     return 64;

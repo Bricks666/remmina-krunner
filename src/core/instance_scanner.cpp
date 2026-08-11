@@ -7,8 +7,10 @@
 #include <QFileInfo>
 #include <QSet>
 #include <QStandardPaths>
+#include <QStringDecoder>
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace {
@@ -129,6 +131,27 @@ bool isRemminaApplicationRef(const QString &ref)
         && components.at(1) == QLatin1StringView(remminaApplicationId);
 }
 
+std::optional<QString> decodeFlatpakField(const QByteArray &encodedField)
+{
+    QStringDecoder decoder(QStringDecoder::Utf8);
+    QString field = decoder.decode(encodedField);
+    if (decoder.hasError()) {
+        return std::nullopt;
+    }
+    const bool containsControl =
+        std::any_of(field.cbegin(), field.cend(), [](const QChar character) {
+            return character.category() == QChar::Other_Control;
+        });
+    if (containsControl) {
+        return std::nullopt;
+    }
+    field = field.trimmed();
+    if (field.isEmpty()) {
+        return std::nullopt;
+    }
+    return field;
+}
+
 int installationGroup(const QString &installation)
 {
     if (installation == QStringLiteral("user")) {
@@ -150,20 +173,21 @@ QList<FlatpakInstallation> parseFlatpakInstallations(const QByteArray &output)
             continue;
         }
 
-        const QString application = QString::fromUtf8(columns.at(0)).trimmed();
-        const QString ref = QString::fromUtf8(columns.at(1)).trimmed();
-        const QString installation = QString::fromUtf8(columns.at(2)).trimmed();
-        if (application != QLatin1StringView(remminaApplicationId) || ref.isEmpty()
-            || installation.isEmpty() || !isRemminaApplicationRef(ref)) {
+        const std::optional<QString> application = decodeFlatpakField(columns.at(0));
+        const std::optional<QString> ref = decodeFlatpakField(columns.at(1));
+        const std::optional<QString> installation = decodeFlatpakField(columns.at(2));
+        if (!application || !ref || !installation
+            || *application != QLatin1StringView(remminaApplicationId)
+            || !isRemminaApplicationRef(*ref)) {
             continue;
         }
 
-        const QString deduplicationKey = installation + QChar(0x1f) + ref;
+        const QString deduplicationKey = *installation + QChar(0x1f) + *ref;
         if (seen.contains(deduplicationKey)) {
             continue;
         }
         seen.insert(deduplicationKey);
-        installations.append({.installation = installation, .ref = ref});
+        installations.append({.installation = *installation, .ref = *ref});
     }
 
     std::sort(installations.begin(),
@@ -238,10 +262,10 @@ InstanceScanResult InstanceScanner::scan() const
 
         nativeCanonicalPaths.insert(canonicalPath);
         result.instances.append({
-            .id = QStringLiteral("native:") + canonicalPath,
+            .id = QStringLiteral("native:") + absolutePath,
             .kind = InstanceKind::Native,
-            .displayName = QStringLiteral("Remmina (Native: %1)").arg(canonicalPath),
-            .executable = canonicalPath,
+            .displayName = QStringLiteral("Remmina (Native: %1)").arg(absolutePath),
+            .executable = absolutePath,
             .launcherPrefix = {},
             .profiles = hostProfiles,
         });

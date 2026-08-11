@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QDeadlineTimer>
 #include <QProcess>
+#include <QThread>
 
 #include <memory>
 #include <utility>
@@ -16,11 +17,12 @@ constexpr int reapingGraceMilliseconds = 1000;
 
 void deferReaping(std::unique_ptr<QProcess> process)
 {
+    QCoreApplication *application = QCoreApplication::instance();
+    Q_ASSERT(application != nullptr);
+    Q_ASSERT(!QCoreApplication::closingDown());
+    Q_ASSERT(QThread::currentThread() == application->thread());
+
     QProcess *pendingProcess = process.release();
-    if (QCoreApplication *application = QCoreApplication::instance();
-        application != nullptr && application->thread() == pendingProcess->thread()) {
-        pendingProcess->setParent(application);
-    }
     QObject::connect(pendingProcess,
                      &QProcess::finished,
                      pendingProcess,
@@ -60,6 +62,12 @@ ProbeResult stoppedProbeResult(ProbeResult::Status status, std::unique_ptr<QProc
 
 ProbeResult QtProcessProbe::run(const QString &executable, const QStringList &arguments)
 {
+    QCoreApplication *application = QCoreApplication::instance();
+    if (application == nullptr || QCoreApplication::closingDown()
+        || QThread::currentThread() != application->thread()) {
+        return {.status = ProbeResult::Status::Failed, .standardOutput = {}};
+    }
+
     auto process = std::make_unique<QProcess>();
     process->setProgram(executable);
     process->setArguments(arguments);
