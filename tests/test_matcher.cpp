@@ -49,10 +49,12 @@ private slots:
     void parsesLookupTokens();
     void handlesUnicodeWhitespaceAndCaseFolding();
     void rejectsNonStandaloneTrigger();
+    void matchesUnicodeCaseFoldEquivalents();
     void matchesOnlyVisibleProfileFields();
     void matchesSupportedServerForms();
     void requiresEveryTokenAcrossVisibleFields();
     void ranksBestRelationshipAndWeakestToken();
+    void usesWeakestMixedTokenRelationship();
     void sortsTiesByFoldedVisibleMetadataAndSourcePath();
     void returnsNoMatchesForEmptyTokens();
     void doesNotMutateInput();
@@ -108,6 +110,10 @@ void MatcherTest::handlesUnicodeWhitespaceAndCaseFolding()
     QVERIFY(lookup.kind == QueryKind::Lookup);
     QCOMPARE(lookup.tokens,
              QStringList({QStringLiteral("stra\u00dfe"), QStringLiteral("z\u00fcrich")}));
+
+    const ParsedQuery finalSigma = parseRunnerQuery(QStringLiteral("rem \u03c2"));
+    QVERIFY(finalSigma.kind == QueryKind::Lookup);
+    QCOMPARE(finalSigma.tokens, QStringList({QStringLiteral("\u03c3")}));
 }
 
 void MatcherTest::rejectsNonStandaloneTrigger()
@@ -126,6 +132,20 @@ void MatcherTest::rejectsNonStandaloneTrigger()
         QVERIFY(parsed.kind == QueryKind::Ignore);
         QVERIFY(parsed.tokens.isEmpty());
     }
+}
+
+void MatcherTest::matchesUnicodeCaseFoldEquivalents()
+{
+    const QList<ProfileRecord> profiles{
+        makeRecord(QStringLiteral("sigma"),
+                   QStringLiteral("\u03c2"),
+                   QStringLiteral("sigma.example.com")),
+    };
+
+    const QList<SearchMatch> matches = matchProfiles(profiles, {QStringLiteral("\u03c3")});
+    QCOMPARE(matches.size(), 1);
+    QCOMPARE(matches.constFirst().record.opaqueId, QStringLiteral("sigma"));
+    QCOMPARE(matches.constFirst().relevance, 1.00);
 }
 
 void MatcherTest::matchesOnlyVisibleProfileFields()
@@ -254,6 +274,28 @@ void MatcherTest::ranksBestRelationshipAndWeakestToken()
     QCOMPARE(matches.at(2).relevance, 0.90);
     QCOMPARE(matches.at(3).record.opaqueId, QStringLiteral("substring"));
     QCOMPARE(matches.at(3).relevance, 0.75);
+}
+
+void MatcherTest::usesWeakestMixedTokenRelationship()
+{
+    const QList<ProfileRecord> profiles{
+        makeRecord(QStringLiteral("substring-weakest"),
+                   QStringLiteral("alpha"),
+                   QStringLiteral("host"),
+                   {QStringLiteral("xbetax")}),
+        makeRecord(QStringLiteral("prefix-weakest"),
+                   QStringLiteral("alpha"),
+                   QStringLiteral("host"),
+                   {QStringLiteral("betamax")}),
+    };
+
+    const QList<SearchMatch> matches =
+        matchProfiles(profiles, {QStringLiteral("alpha"), QStringLiteral("beta")});
+    QCOMPARE(matches.size(), 2);
+    QCOMPARE(matches.at(0).record.opaqueId, QStringLiteral("prefix-weakest"));
+    QCOMPARE(matches.at(0).relevance, 0.90);
+    QCOMPARE(matches.at(1).record.opaqueId, QStringLiteral("substring-weakest"));
+    QCOMPARE(matches.at(1).relevance, 0.75);
 }
 
 void MatcherTest::sortsTiesByFoldedVisibleMetadataAndSourcePath()

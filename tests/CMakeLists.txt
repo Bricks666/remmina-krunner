@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
 # SPDX-License-Identifier: 0BSD
 
+get_target_property(remmina_krunner_core_pic remmina_krunner_core POSITION_INDEPENDENT_CODE)
+if(NOT remmina_krunner_core_pic)
+    message(FATAL_ERROR "remmina_krunner_core must be position-independent")
+endif()
+
 add_executable(test_smoke test_smoke.cpp)
 target_link_libraries(test_smoke PRIVATE Qt6::Test)
 
