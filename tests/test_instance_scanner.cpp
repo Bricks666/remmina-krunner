@@ -87,6 +87,8 @@ private slots:
     void rejectsInvalidNativeCandidates();
     void deduplicatesNativeCanonicalPaths();
     void excludesSnapLauncherAliasesWithoutSubstringGuessing();
+    void excludesDistinctNativeAliasToSnapCanonicalTarget();
+    void excludesOnlyExecutablesUnderSnapMountRoot();
     void discoversFlatpakInstallationsInDeterministicOrder();
     void filtersMalformedAndDuplicateFlatpakRows();
     void treatsMissingFlatpakAsUnavailable();
@@ -218,6 +220,79 @@ void InstanceScannerTest::excludesSnapLauncherAliasesWithoutSubstringGuessing()
     QCOMPARE(nativeInstances.size(), 1);
     QCOMPARE(nativeInstances.constFirst().executable,
              QFileInfo(unrelatedExecutable).canonicalFilePath());
+}
+
+void InstanceScannerTest::excludesDistinctNativeAliasToSnapCanonicalTarget()
+{
+    QTemporaryDir temporaryDirectory;
+    QVERIFY(temporaryDirectory.isValid());
+    const QDir root(temporaryDirectory.path());
+    const QString sharedTarget = createExecutable(root.filePath(QStringLiteral("shared")),
+                                                  QStringLiteral("snap-command"));
+    const QString snapLauncherDirectory = root.filePath(QStringLiteral("snap-launcher"));
+    const QString nativeAliasDirectory = root.filePath(QStringLiteral("native-alias"));
+    const QString unrelatedDirectory = root.filePath(QStringLiteral("unrelated"));
+    QVERIFY(!sharedTarget.isEmpty());
+    QVERIFY(QDir{}.mkpath(snapLauncherDirectory));
+    QVERIFY(QDir{}.mkpath(nativeAliasDirectory));
+
+    const QString snapLauncher =
+        QDir(snapLauncherDirectory).filePath(QStringLiteral("remmina"));
+    const QString nativeAlias =
+        QDir(nativeAliasDirectory).filePath(QStringLiteral("remmina"));
+    QVERIFY(snapLauncher != nativeAlias);
+    QVERIFY(QFile::link(sharedTarget, snapLauncher));
+    QVERIFY(QFile::link(sharedTarget, nativeAlias));
+    QCOMPARE(QFileInfo(snapLauncher).canonicalFilePath(),
+             QFileInfo(nativeAlias).canonicalFilePath());
+    const QString unrelatedExecutable = createExecutable(unrelatedDirectory);
+    QVERIFY(!unrelatedExecutable.isEmpty());
+
+    RecordingProcessProbe probe;
+    ScanEnvironment environment =
+        nativeEnvironment({nativeAliasDirectory, unrelatedDirectory});
+    environment.snapLauncher = snapLauncher;
+
+    const InstanceScanResult result = InstanceScanner(probe, std::move(environment)).scan();
+    const QList<RemminaInstance> nativeInstances = instancesOfKind(result, InstanceKind::Native);
+
+    QCOMPARE(nativeInstances.size(), 1);
+    QCOMPARE(nativeInstances.constFirst().executable,
+             QFileInfo(unrelatedExecutable).canonicalFilePath());
+}
+
+void InstanceScannerTest::excludesOnlyExecutablesUnderSnapMountRoot()
+{
+    QCOMPARE(ScanEnvironment{}.snapMountRoot, QStringLiteral("/snap"));
+
+    QTemporaryDir temporaryDirectory;
+    QVERIFY(temporaryDirectory.isValid());
+    const QDir root(temporaryDirectory.path());
+    const QString snapMountRoot = root.filePath(QStringLiteral("snap"));
+    const QString underSnapDirectory =
+        QDir(snapMountRoot).filePath(QStringLiteral("remmina/revision/bin"));
+    const QString prefixSiblingDirectory = root.filePath(QStringLiteral("snapshots"));
+    const QString containsSnapDirectory = root.filePath(QStringLiteral("contains-snap-word"));
+    const QString underSnapExecutable = createExecutable(underSnapDirectory);
+    const QString prefixSiblingExecutable = createExecutable(prefixSiblingDirectory);
+    const QString containsSnapExecutable = createExecutable(containsSnapDirectory);
+    QVERIFY(!underSnapExecutable.isEmpty());
+    QVERIFY(!prefixSiblingExecutable.isEmpty());
+    QVERIFY(!containsSnapExecutable.isEmpty());
+
+    RecordingProcessProbe probe;
+    ScanEnvironment environment = nativeEnvironment(
+        {underSnapDirectory, prefixSiblingDirectory, containsSnapDirectory});
+    environment.snapMountRoot = snapMountRoot;
+
+    const InstanceScanResult result = InstanceScanner(probe, std::move(environment)).scan();
+    const QList<RemminaInstance> nativeInstances = instancesOfKind(result, InstanceKind::Native);
+
+    QCOMPARE(nativeInstances.size(), 2);
+    QCOMPARE(nativeInstances.at(0).executable,
+             QFileInfo(prefixSiblingExecutable).canonicalFilePath());
+    QCOMPARE(nativeInstances.at(1).executable,
+             QFileInfo(containsSnapExecutable).canonicalFilePath());
 }
 
 void InstanceScannerTest::discoversFlatpakInstallationsInDeterministicOrder()

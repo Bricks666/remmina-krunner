@@ -30,10 +30,27 @@ bool isExecutableFile(const QFileInfo &fileInfo)
     return fileInfo.exists() && fileInfo.isFile() && fileInfo.isExecutable();
 }
 
-bool isUnderSnapRoot(const QString &canonicalPath)
+QString canonicalOrAbsolutePath(const QString &path)
 {
-    return canonicalPath == QStringLiteral("/snap")
-        || canonicalPath.startsWith(QStringLiteral("/snap/"));
+    if (path.isEmpty()) {
+        return {};
+    }
+    const QFileInfo fileInfo(path);
+    const QString canonicalPath = fileInfo.canonicalFilePath();
+    return canonicalPath.isEmpty() ? cleanPath(fileInfo.absoluteFilePath())
+                                   : cleanPath(canonicalPath);
+}
+
+bool isUnderSnapRoot(const QString &canonicalPath, const QString &snapMountRoot)
+{
+    if (snapMountRoot.isEmpty()) {
+        return false;
+    }
+    if (snapMountRoot == QStringLiteral("/")) {
+        return canonicalPath.startsWith(u'/');
+    }
+    return canonicalPath == snapMountRoot
+        || canonicalPath.startsWith(snapMountRoot + QLatin1Char('/'));
 }
 
 void addFailedBackend(QStringList &failedBackends, const QString &backend)
@@ -197,6 +214,7 @@ InstanceScanResult InstanceScanner::scan() const
         ? QString{}
         : cleanPath(snapLauncherInfo.absoluteFilePath());
     const QString snapLauncherCanonical = snapLauncherInfo.canonicalFilePath();
+    const QString snapMountRoot = canonicalOrAbsolutePath(environment_.snapMountRoot);
 
     const ProfileEnvironment hostProfiles = nativeProfiles(environment_.userHome);
     QSet<QString> nativeCanonicalPaths;
@@ -213,7 +231,8 @@ InstanceScanResult InstanceScanner::scan() const
         const QString absolutePath = cleanPath(candidate.absoluteFilePath());
         if ((!snapLauncherPath.isEmpty() && absolutePath == snapLauncherPath)
             || (!snapLauncherCanonical.isEmpty() && canonicalPath == snapLauncherCanonical)
-            || isUnderSnapRoot(canonicalPath) || nativeCanonicalPaths.contains(canonicalPath)) {
+            || isUnderSnapRoot(canonicalPath, snapMountRoot)
+            || nativeCanonicalPaths.contains(canonicalPath)) {
             continue;
         }
 

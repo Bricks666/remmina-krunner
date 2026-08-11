@@ -15,6 +15,7 @@ struct ScanEnvironment {
     QString flatpakExecutable;
     QString snapLauncher;
     QString userHome;
+    QString snapMountRoot = QStringLiteral("/snap");
 };
 
 struct InstanceScanResult {
