@@ -9,6 +9,21 @@ repository_root=$(cd -- "${script_directory}/.." && pwd -P)
 image_name=localhost/remmina-krunner-dev:fedora44
 host_user_id=$(id -u)
 host_group_id=$(id -g)
+image_id_file=""
+
+cleanup_image_id_file() {
+    if [[ -z "${image_id_file}" || (! -e "${image_id_file}" && ! -L "${image_id_file}") ]]; then
+        return
+    fi
+    if [[ "${image_id_file}" =~ ^/tmp/remmina-krunner-image-id\.[[:alnum:]]{6}$ \
+        && -f "${image_id_file}" && ! -L "${image_id_file}" ]]; then
+        rm -f -- "${image_id_file}"
+        return
+    fi
+    echo "Refusing to remove unexpected image ID file: ${image_id_file}" >&2
+}
+
+trap cleanup_image_id_file EXIT
 
 usage() {
     echo "Usage: $0 {build|configure|test [ctest-regex]|check|sanitize|release-build}" >&2
@@ -35,10 +50,30 @@ case "${mode}" in
         ;;
 esac
 
+image_id_file=$(mktemp /tmp/remmina-krunner-image-id.XXXXXX)
+if [[ ! "${image_id_file}" =~ ^/tmp/remmina-krunner-image-id\.[[:alnum:]]{6}$ \
+    || ! -f "${image_id_file}" || -L "${image_id_file}" ]]; then
+    echo "Refusing to use unexpected image ID file: ${image_id_file}" >&2
+    exit 1
+fi
+
 podman build \
+    --iidfile "${image_id_file}" \
     --tag "${image_name}" \
     --file "${repository_root}/containers/Containerfile" \
-    "${repository_root}"
+    "${repository_root}/containers"
+
+mapfile -t image_id_lines < "${image_id_file}"
+image_id_pattern='^(sha256:)?[0-9a-f]{64}$'
+if [[ ${#image_id_lines[@]} -ne 1 ]]; then
+    echo "Podman returned an invalid image ID." >&2
+    exit 1
+fi
+image_id=${image_id_lines[0]}
+if [[ ! "${image_id}" =~ ${image_id_pattern} ]]; then
+    echo "Podman returned an invalid image ID." >&2
+    exit 1
+fi
 
 podman run --rm --userns=keep-id \
     --env REMMINA_KRUNNER_CONTAINER=1 \
@@ -46,5 +81,5 @@ podman run --rm --userns=keep-id \
     --user "${host_user_id}:${host_group_id}" \
     --volume "${repository_root}:/workspace:Z" \
     --workdir /workspace \
-    "${image_name}" \
+    "${image_id}" \
     ./scripts/ci.sh "$@"

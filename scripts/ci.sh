@@ -46,6 +46,7 @@ run_tests() {
 
     local -a ctest_arguments=(
         --test-dir "${build_directory}"
+        --no-tests=error
         --output-on-failure
     )
     if [[ -n "${test_regex}" ]]; then
@@ -59,7 +60,7 @@ run_check() {
     configure_build "${build_directory}" Debug ON
     cmake --build "${build_directory}" --parallel "${parallel_jobs}"
     QT_QPA_PLATFORM=offscreen \
-        ctest --test-dir "${build_directory}" --output-on-failure
+        ctest --test-dir "${build_directory}" --no-tests=error --output-on-failure
 }
 
 run_sanitize() {
@@ -73,7 +74,7 @@ run_sanitize() {
     ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
         UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
         QT_QPA_PLATFORM=offscreen \
-        ctest --test-dir "${build_directory}" --output-on-failure
+        ctest --test-dir "${build_directory}" --no-tests=error --output-on-failure
 }
 
 release_build() {
