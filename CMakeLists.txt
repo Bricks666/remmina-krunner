@@ -15,6 +15,7 @@ find_package(Qt6 6.7 REQUIRED COMPONENTS Core)
 
 add_library(remmina_krunner_core STATIC
     src/core/matcher.cpp
+    src/core/selection_policy.cpp
 )
 set_target_properties(remmina_krunner_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(remmina_krunner_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
