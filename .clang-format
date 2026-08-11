@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
 # SPDX-License-Identifier: 0BSD
 
-.worktrees/
-/build/
-/build-*/
-/compile_commands.json
-/.idea/
-/.vscode/
-*~
-*.swp
-*.swo
+BasedOnStyle: LLVM
+ColumnLimit: 120
