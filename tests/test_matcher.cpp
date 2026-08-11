@@ -289,13 +289,18 @@ void MatcherTest::usesWeakestMixedTokenRelationship()
                    {QStringLiteral("betamax")}),
     };
 
-    const QList<SearchMatch> matches =
-        matchProfiles(profiles, {QStringLiteral("alpha"), QStringLiteral("beta")});
-    QCOMPARE(matches.size(), 2);
-    QCOMPARE(matches.at(0).record.opaqueId, QStringLiteral("prefix-weakest"));
-    QCOMPARE(matches.at(0).relevance, 0.90);
-    QCOMPARE(matches.at(1).record.opaqueId, QStringLiteral("substring-weakest"));
-    QCOMPARE(matches.at(1).relevance, 0.75);
+    const QList<QStringList> tokenOrders{
+        {QStringLiteral("alpha"), QStringLiteral("beta")},
+        {QStringLiteral("beta"), QStringLiteral("alpha")},
+    };
+    for (const QStringList &tokens : tokenOrders) {
+        const QList<SearchMatch> matches = matchProfiles(profiles, tokens);
+        QCOMPARE(matches.size(), 2);
+        QCOMPARE(matches.at(0).record.opaqueId, QStringLiteral("prefix-weakest"));
+        QCOMPARE(matches.at(0).relevance, 0.90);
+        QCOMPARE(matches.at(1).record.opaqueId, QStringLiteral("substring-weakest"));
+        QCOMPARE(matches.at(1).relevance, 0.75);
+    }
 }
 
 void MatcherTest::sortsTiesByFoldedVisibleMetadataAndSourcePath()
