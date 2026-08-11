@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
+// SPDX-License-Identifier: 0BSD
+
+#pragma once
+
+#include "core/remmina_instance.h"
+#include "platform/process_probe.h"
+
+#include <QList>
+#include <QString>
+#include <QStringList>
+
+struct ScanEnvironment {
+    QStringList pathEntries;
+    QString flatpakExecutable;
+    QString snapLauncher;
+    QString userHome;
+};
+
+struct InstanceScanResult {
+    QList<RemminaInstance> instances;
+    QStringList failedBackends;
+};
+
+class InstanceScanner {
+public:
+    InstanceScanner(ProcessProbe &probe, ScanEnvironment environment);
+    [[nodiscard]] InstanceScanResult scan() const;
+
+private:
+    ProcessProbe &probe_;
+    ScanEnvironment environment_;
+};
