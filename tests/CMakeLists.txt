@@ -6,6 +6,11 @@ target_link_libraries(test_smoke PRIVATE Qt6::Test)
 
 add_test(NAME smoke COMMAND test_smoke)
 
+add_executable(test_matcher test_matcher.cpp)
+target_link_libraries(test_matcher PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME matcher COMMAND test_matcher)
+
 find_program(TEST_BASH_EXECUTABLE NAMES bash REQUIRED)
 add_test(NAME ci_no_tests_error
     COMMAND ${TEST_BASH_EXECUTABLE}
