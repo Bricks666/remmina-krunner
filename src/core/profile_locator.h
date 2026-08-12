@@ -7,7 +7,6 @@
 
 #include <QString>
 
-#include <optional>
 #include <variant>
 
 struct LocatedProfileDirectory {
@@ -15,18 +14,11 @@ struct LocatedProfileDirectory {
     QString launchPath;
 };
 
-[[nodiscard]] std::optional<LocatedProfileDirectory> locateProfileDirectory(
-    const RemminaInstance &instance);
-
-namespace profile_locator_detail {
-
-enum class LocationError {
+enum class ProfileLocationError {
     NotFound,
     Unreadable,
 };
 
-using LocationResult = std::variant<LocatedProfileDirectory, LocationError>;
+using ProfileLocationResult = std::variant<LocatedProfileDirectory, ProfileLocationError>;
 
-[[nodiscard]] LocationResult locateProfileDirectoryWithError(const RemminaInstance &instance);
-
-} // namespace profile_locator_detail
+[[nodiscard]] ProfileLocationResult locateProfileDirectory(const RemminaInstance &instance);

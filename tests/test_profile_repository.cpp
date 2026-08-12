@@ -307,6 +307,27 @@ void ProfileRepositoryTest::distinguishesMissingFromUnreadableDirectory()
     QCOMPARE(std::get<ProfileRepositoryError>(inaccessibleParent),
              ProfileRepositoryError::UnreadableDirectory);
     QVERIFY(::chmod(encodedParent.constData(), 0700) == 0);
+
+    writeProfile(directory, u"list-only.remmina");
+    QVERIFY(::chmod(encodedDirectory.constData(), 0400) == 0);
+    const auto listOnly = repository.load(instance);
+    QVERIFY(::chmod(encodedDirectory.constData(), 0700) == 0);
+    QVERIFY(std::holds_alternative<ProfileRepositoryError>(listOnly));
+    QCOMPARE(std::get<ProfileRepositoryError>(listOnly),
+             ProfileRepositoryError::UnreadableDirectory);
+
+    const QString protectedParent =
+        makeDirectory(temporary.path() + QStringLiteral("/protected-target"));
+    const QString protectedTarget = writeProfile(protectedParent, u"target.remmina");
+    QVERIFY(QFile::link(protectedTarget,
+                        directory + QStringLiteral("/protected-link.remmina")));
+    const QByteArray encodedProtectedParent = QFile::encodeName(protectedParent);
+    QVERIFY(::chmod(encodedProtectedParent.constData(), 0000) == 0);
+    const auto inaccessibleEntry = repository.load(instance);
+    QVERIFY(::chmod(encodedProtectedParent.constData(), 0700) == 0);
+    QVERIFY(std::holds_alternative<ProfileRepositoryError>(inaccessibleEntry));
+    QCOMPARE(std::get<ProfileRepositoryError>(inaccessibleEntry),
+             ProfileRepositoryError::UnreadableDirectory);
 }
 
 void ProfileRepositoryTest::doesNotMutateDirectoryOrProfile()

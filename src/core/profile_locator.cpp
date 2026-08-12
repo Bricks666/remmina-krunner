@@ -72,6 +72,18 @@ DirectoryStatus directoryStatus(const QString &path)
         return DirectoryStatus::Invalid;
     }
 
+    int accessResult = -1;
+    do {
+        accessResult =
+            ::faccessat(AT_FDCWD, encodedPath.constData(), R_OK | X_OK, AT_EACCESS);
+    } while (accessResult < 0 && errno == EINTR);
+    const int accessError = accessResult < 0 ? errno : 0;
+    if (accessResult < 0) {
+        encodedPath.fill('\0');
+        return accessError == EACCES || accessError == EPERM ? DirectoryStatus::Unreadable
+                                                             : DirectoryStatus::Invalid;
+    }
+
     int descriptor = -1;
     do {
         descriptor =
@@ -250,8 +262,7 @@ std::optional<QString> customDataDirectory(const RemminaInstance &instance)
 
 } // namespace
 
-profile_locator_detail::LocationResult profile_locator_detail::locateProfileDirectoryWithError(
-    const RemminaInstance &instance)
+ProfileLocationResult locateProfileDirectory(const RemminaInstance &instance)
 {
     bool sawUnreadable = false;
     const std::optional<QList<PathMapping>> mappings = instance.kind == InstanceKind::Flatpak
@@ -269,6 +280,9 @@ profile_locator_detail::LocationResult profile_locator_detail::locateProfileDire
         }
         if (custom.has_value()) {
             return std::move(*custom);
+        }
+        if (sawUnreadable) {
+            return ProfileLocationError::Unreadable;
         }
     }
 
@@ -294,16 +308,9 @@ profile_locator_detail::LocationResult profile_locator_detail::locateProfileDire
         if (location.has_value()) {
             return std::move(*location);
         }
+        if (sawUnreadable) {
+            return ProfileLocationError::Unreadable;
+        }
     }
-    return sawUnreadable ? LocationError::Unreadable : LocationError::NotFound;
-}
-
-std::optional<LocatedProfileDirectory> locateProfileDirectory(const RemminaInstance &instance)
-{
-    profile_locator_detail::LocationResult result =
-        profile_locator_detail::locateProfileDirectoryWithError(instance);
-    if (auto *location = std::get_if<LocatedProfileDirectory>(&result)) {
-        return std::move(*location);
-    }
-    return std::nullopt;
+    return ProfileLocationError::NotFound;
 }

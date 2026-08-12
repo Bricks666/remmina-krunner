@@ -103,6 +103,15 @@ EnumerationResult enumerateCandidates(const LocatedProfileDirectory &directory)
         return ProfileRepositoryError::UnreadableDirectory;
     }
 
+    int accessResult = -1;
+    do {
+        accessResult = ::faccessat(descriptor, ".", R_OK | X_OK, AT_EACCESS);
+    } while (accessResult < 0 && errno == EINTR);
+    if (accessResult < 0) {
+        ::close(descriptor);
+        return ProfileRepositoryError::UnreadableDirectory;
+    }
+
     DIR *stream = ::fdopendir(descriptor);
     if (stream == nullptr) {
         ::close(descriptor);
@@ -111,6 +120,7 @@ EnumerationResult enumerateCandidates(const LocatedProfileDirectory &directory)
 
     QList<Candidate> discovered;
     bool enumerationFailed = false;
+    bool metadataPermissionFailure = false;
     while (true) {
         errno = 0;
         dirent *entry = ::readdir(stream);
@@ -134,7 +144,15 @@ EnumerationResult enumerateCandidates(const LocatedProfileDirectory &directory)
         do {
             statResult = ::fstatat(::dirfd(stream), encodedName.constData(), &metadata, 0);
         } while (statResult < 0 && errno == EINTR);
-        if (statResult < 0 || !S_ISREG(metadata.st_mode)) {
+        const int statError = statResult < 0 ? errno : 0;
+        if (statResult < 0) {
+            if (statError == EACCES || statError == EPERM) {
+                metadataPermissionFailure = true;
+                break;
+            }
+            continue;
+        }
+        if (!S_ISREG(metadata.st_mode)) {
             continue;
         }
 
@@ -176,7 +194,7 @@ EnumerationResult enumerateCandidates(const LocatedProfileDirectory &directory)
         });
     }
     ::closedir(stream);
-    if (enumerationFailed) {
+    if (enumerationFailed || metadataPermissionFailure) {
         return ProfileRepositoryError::UnreadableDirectory;
     }
 
@@ -237,11 +255,9 @@ ProfileRepository::ProfileRepository(ProfileParserFunction parser)
 std::variant<ProfileSnapshot, ProfileRepositoryError> ProfileRepository::load(
     const RemminaInstance &instance)
 {
-    profile_locator_detail::LocationResult locationResult =
-        profile_locator_detail::locateProfileDirectoryWithError(instance);
-    if (const auto *error =
-            std::get_if<profile_locator_detail::LocationError>(&locationResult)) {
-        return *error == profile_locator_detail::LocationError::Unreadable
+    ProfileLocationResult locationResult = locateProfileDirectory(instance);
+    if (const auto *error = std::get_if<ProfileLocationError>(&locationResult)) {
+        return *error == ProfileLocationError::Unreadable
             ? ProfileRepositoryError::UnreadableDirectory
             : ProfileRepositoryError::NoProfileDirectory;
     }
