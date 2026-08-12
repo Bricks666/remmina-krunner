@@ -93,6 +93,47 @@ RemminaInstance sandboxInstance(const QTemporaryDir &temporary, InstanceKind kin
     };
 }
 
+struct SnapLayout {
+    QString root;
+    QString current;
+    QString activeRevision;
+    QString common;
+};
+
+SnapLayout createSnapLayout(const QTemporaryDir &temporary, QStringView revision = u"42")
+{
+    const QString root =
+        makeDirectory(temporary.path() + QStringLiteral("/home/tester/snap/remmina"));
+    const QString activeRevision = makeDirectory(QDir(root).filePath(revision.toString()));
+    const QString current = QDir(root).filePath(QStringLiteral("current"));
+    if (!QFile::link(activeRevision, current)) {
+        qFatal("Unable to create Snap current link");
+    }
+    return {
+        .root = root,
+        .current = current,
+        .activeRevision = activeRevision,
+        .common = QDir(root).filePath(QStringLiteral("common")),
+    };
+}
+
+QString makeSymbolicLinkChain(const QString &directory,
+                              QStringView prefix,
+                              int linkCount,
+                              const QString &target)
+{
+    QString next = target;
+    for (int index = linkCount; index > 0; --index) {
+        const QString link = QDir(directory).filePath(
+            prefix.toString() + QString::number(index));
+        if (!QFile::link(next, link)) {
+            qFatal("Unable to create symbolic-link chain");
+        }
+        next = link;
+    }
+    return next;
+}
+
 QString preferencePath(const RemminaInstance &instance)
 {
     return instance.profiles.configHome + QStringLiteral("/remmina/remmina.pref");
@@ -147,6 +188,9 @@ private slots:
     void inconsistentSandboxRootsRejectCustomButKeepKnownDefaults();
     void flatpakAndSnapNeverUseNativeSystemRoots();
     void snapKeepsLauncherVisiblePathsAndRestrictsCustomPaths();
+    void snapAcceptsActiveRevisionAndCommonCustomPaths();
+    void snapRejectsOtherRevisionsBoundariesAndEscapes();
+    void sandboxSymlinkTraversalHonorsExactBound();
     void doesNotCreateDirectoriesOrModifyPreferences();
 };
 
@@ -513,6 +557,93 @@ void ProfileLocatorTest::snapKeepsLauncherVisiblePathsAndRestrictsCustomPaths()
                                          + QStringLiteral("/home/tester/snap/remmina/current/custom"));
     writePreference(instance, encodeGlibValue(custom));
     compareLocation(locateProfileDirectory(instance), custom, custom);
+}
+
+void ProfileLocatorTest::snapAcceptsActiveRevisionAndCommonCustomPaths()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const RemminaInstance instance = sandboxInstance(temporary, InstanceKind::Snap);
+    const SnapLayout layout = createSnapLayout(temporary);
+
+    const QString defaultDirectory =
+        makeDirectory(instance.profiles.dataHome + QStringLiteral("/remmina"));
+    compareLocation(locateProfileDirectory(instance), defaultDirectory, defaultDirectory);
+
+    const QString currentCustom =
+        makeDirectory(layout.current + QStringLiteral("/current-custom"));
+    writePreference(instance, encodeGlibValue(currentCustom));
+    compareLocation(locateProfileDirectory(instance), currentCustom, currentCustom);
+
+    const QString activeCustom =
+        makeDirectory(layout.activeRevision + QStringLiteral("/active-custom"));
+    writePreference(instance, encodeGlibValue(activeCustom));
+    compareLocation(locateProfileDirectory(instance), activeCustom, activeCustom);
+
+    const QString commonCustom =
+        makeDirectory(layout.common + QStringLiteral("/common-custom"));
+    writePreference(instance, encodeGlibValue(commonCustom));
+    compareLocation(locateProfileDirectory(instance), commonCustom, commonCustom);
+}
+
+void ProfileLocatorTest::snapRejectsOtherRevisionsBoundariesAndEscapes()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const RemminaInstance instance = sandboxInstance(temporary, InstanceKind::Snap);
+    const SnapLayout layout = createSnapLayout(temporary);
+    const QString fallback =
+        makeDirectory(instance.profiles.dataHome + QStringLiteral("/remmina"));
+    const QString external = makeDirectory(temporary.path() + QStringLiteral("/external-snap"));
+    const QString oldRevision =
+        makeDirectory(layout.root + QStringLiteral("/41/custom"));
+    const QString revisionBoundary =
+        makeDirectory(layout.root + QStringLiteral("/420/custom"));
+    const QString currentBoundary =
+        makeDirectory(layout.root + QStringLiteral("/current2/custom"));
+    const QString commonBoundary =
+        makeDirectory(layout.root + QStringLiteral("/common2/custom"));
+
+    const QString currentEscape = layout.current + QStringLiteral("/current-escape");
+    QVERIFY(QFile::link(external, currentEscape));
+    const QString common = makeDirectory(layout.common);
+    const QString commonEscape = common + QStringLiteral("/common-escape");
+    QVERIFY(QFile::link(external, commonEscape));
+
+    const QList<QString> rejected{
+        oldRevision,
+        revisionBoundary,
+        currentBoundary,
+        commonBoundary,
+        currentEscape,
+        commonEscape,
+    };
+    for (const QString &custom : rejected) {
+        writePreference(instance, encodeGlibValue(custom));
+        compareLocation(locateProfileDirectory(instance), fallback, fallback);
+    }
+}
+
+void ProfileLocatorTest::sandboxSymlinkTraversalHonorsExactBound()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const RemminaInstance instance = sandboxInstance(temporary, InstanceKind::Flatpak);
+    const QString appRoot = temporary.path()
+        + QStringLiteral("/home/tester/.var/app/org.remmina.Remmina");
+    const QString fallback =
+        makeDirectory(instance.profiles.dataHome + QStringLiteral("/remmina"));
+    const QString allowedTarget = makeDirectory(appRoot + QStringLiteral("/allowed-target"));
+    const QString allowed =
+        makeSymbolicLinkChain(appRoot, u"allowed-link-", 40, allowedTarget);
+    writePreference(instance, encodeGlibValue(allowed));
+    compareLocation(locateProfileDirectory(instance), allowed, allowed);
+
+    const QString rejectedTarget = makeDirectory(appRoot + QStringLiteral("/rejected-target"));
+    const QString rejected =
+        makeSymbolicLinkChain(appRoot, u"rejected-link-", 41, rejectedTarget);
+    writePreference(instance, encodeGlibValue(rejected));
+    compareLocation(locateProfileDirectory(instance), fallback, fallback);
 }
 
 void ProfileLocatorTest::doesNotCreateDirectoriesOrModifyPreferences()

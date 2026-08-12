@@ -561,7 +561,9 @@ Build temporary native, Flatpak, and Snap homes. Test valid custom
 `datadir_path`, nonexistent custom fallback, legacy fallback, XDG data
 fallback, applicable native system-data fallback, no directory, relative and
 escaped preference values, host-equal Flatpak/Snap launch paths, component-safe
-sandbox roots, and rejection of external custom sandbox paths.
+sandbox roots, Snap current/active-revision/common custom paths, rejection of
+other revisions and external custom sandbox paths, and bounded symlink
+resolution.
 
 **Step 2: Write failing repository tests**
 

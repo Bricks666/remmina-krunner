@@ -160,8 +160,8 @@ Only the selected instance's profile environment is used.
 - Native instances use the host XDG configuration and data locations.
 - Flatpak instances use the `org.remmina.Remmina` per-application XDG
   locations below `~/.var/app`.
-- Snap uses the Remmina Snap's current user-data environment below
-  `~/snap/remmina`.
+- Snap uses the Remmina Snap's current revision user-data environment and
+  revision-independent common data below `~/snap/remmina`.
 
 Within that environment, profile location mirrors Remmina's precedence:
 
@@ -172,13 +172,15 @@ Within that environment, profile location mirrors Remmina's precedence:
 
 Only regular or Remmina-compatible linked files ending in `.remmina` are
 offered to the parser. Flatpak's per-application XDG paths below
-`~/.var/app/org.remmina.Remmina` and Snap's paths below
-`~/snap/remmina/current` are already launcher-visible, so their host and launch
-paths remain identical. A sandbox custom path is accepted only when it is
-component-safely beneath the consistent root derived from that instance's
-known profile locations; an arbitrary host-readable path is not assumed to be
-sandbox-visible. Profile discovery is read-only and never creates a missing
-Remmina directory.
+`~/.var/app/org.remmina.Remmina` and Snap's paths below the stable
+`~/snap/remmina/current`, its resolved active revision, or
+`~/snap/remmina/common` are already launcher-visible, so their host and launch
+paths remain identical. A Snap custom path for another revision is rejected.
+A sandbox custom path is accepted only when both its lexical and resolved paths
+are component-safely beneath the corresponding verified root derived from that
+instance's known profile locations; an arbitrary host-readable path is not
+assumed to be sandbox-visible. Profile discovery is read-only and never creates
+a missing Remmina directory.
 
 ## Profile parsing and privacy
 

@@ -27,6 +27,11 @@ enum class DirectoryStatus {
     Readable,
 };
 
+struct SandboxPathRoot {
+    QString lexicalRoot;
+    QString resolvedRoot;
+};
+
 bool isStructuralPathError(int error)
 {
     return error == ENOENT || error == ENOTDIR || error == ELOOP
@@ -137,7 +142,8 @@ std::optional<QString> resolvedPathForContainment(QString path)
     }
 
     constexpr int maximumSymbolicLinks = 40;
-    for (int followedLinks = 0; followedLinks < maximumSymbolicLinks; ++followedLinks) {
+    int followedLinks = 0;
+    while (true) {
         const QStringList components = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
         QString current = QStringLiteral("/");
         bool followedLink = false;
@@ -146,6 +152,9 @@ std::optional<QString> resolvedPathForContainment(QString path)
             const QFileInfo component(current);
             if (!component.isSymbolicLink()) {
                 continue;
+            }
+            if (followedLinks == maximumSymbolicLinks) {
+                return std::nullopt;
             }
 
             QString target = cleanAbsolutePath(component.symLinkTarget());
@@ -156,6 +165,7 @@ std::optional<QString> resolvedPathForContainment(QString path)
                 target = childPath(target, QStringView(components.at(index)));
             }
             path = std::move(target);
+            ++followedLinks;
             followedLink = true;
             break;
         }
@@ -180,7 +190,7 @@ std::optional<QString> rootBeforeSuffix(const QString &path, const QString &suff
                                                          : std::optional<QString>(root);
 }
 
-std::optional<QString> verifiedSandboxRoot(const RemminaInstance &instance)
+std::optional<QString> consistentModeledSandboxRoot(const RemminaInstance &instance)
 {
     QString expectedRootSuffix;
     QList<std::pair<QString, QString>> roots;
@@ -215,6 +225,59 @@ std::optional<QString> verifiedSandboxRoot(const RemminaInstance &instance)
     return commonRoot;
 }
 
+std::optional<QList<SandboxPathRoot>> verifiedSandboxRoots(
+    const RemminaInstance &instance)
+{
+    const std::optional<QString> modeledRoot = consistentModeledSandboxRoot(instance);
+    if (!modeledRoot.has_value()) {
+        return std::nullopt;
+    }
+    const std::optional<QString> resolvedRoot = resolvedPathForContainment(*modeledRoot);
+    if (!resolvedRoot.has_value()) {
+        return std::nullopt;
+    }
+    if (instance.kind == InstanceKind::Flatpak) {
+        return QList<SandboxPathRoot>{
+            {.lexicalRoot = *modeledRoot, .resolvedRoot = *resolvedRoot},
+        };
+    }
+
+    const QString snapRoot = QFileInfo(*modeledRoot).absolutePath();
+    const std::optional<QString> resolvedSnapRoot = resolvedPathForContainment(snapRoot);
+    if (!resolvedSnapRoot.has_value()) {
+        return std::nullopt;
+    }
+    const std::optional<QString> revision = pathBelow(*resolvedRoot, *resolvedSnapRoot);
+    if (!revision.has_value() || revision->isEmpty()
+        || revision->contains(QLatin1Char('/')) || *revision == QStringLiteral("common")) {
+        return std::nullopt;
+    }
+
+    const QString activeRevisionRoot = childPath(snapRoot, QStringView(*revision));
+    const QString commonRoot = childPath(snapRoot, u"common");
+    const std::optional<QString> resolvedCommonRoot =
+        resolvedPathForContainment(commonRoot);
+    if (!resolvedCommonRoot.has_value()) {
+        return std::nullopt;
+    }
+    const std::optional<QString> resolvedCommonRelative =
+        pathBelow(*resolvedCommonRoot, *resolvedSnapRoot);
+    if (!resolvedCommonRelative.has_value()
+        || *resolvedCommonRelative != QStringLiteral("common")) {
+        return std::nullopt;
+    }
+
+    QList<SandboxPathRoot> roots{
+        {.lexicalRoot = *modeledRoot, .resolvedRoot = *resolvedRoot},
+        {.lexicalRoot = activeRevisionRoot, .resolvedRoot = *resolvedRoot},
+        {.lexicalRoot = commonRoot, .resolvedRoot = *resolvedCommonRoot},
+    };
+    if (roots.at(0).lexicalRoot == roots.at(1).lexicalRoot) {
+        roots.removeAt(1);
+    }
+    return roots;
+}
+
 std::optional<LocatedProfileDirectory> existingLocation(
     QString hostPath, QString launchPath, bool &sawUnreadable)
 {
@@ -235,21 +298,27 @@ std::optional<LocatedProfileDirectory> existingLocation(
 }
 
 std::optional<LocatedProfileDirectory> sandboxCustomLocation(
-    const QString &customPath, const std::optional<QString> &sandboxRoot, bool &sawUnreadable)
+    const QString &customPath,
+    const std::optional<QList<SandboxPathRoot>> &sandboxRoots,
+    bool &sawUnreadable)
 {
     const QString absoluteCustomPath = cleanAbsolutePath(customPath);
-    if (!sandboxRoot.has_value() || !pathBelow(absoluteCustomPath, *sandboxRoot).has_value()) {
+    if (!sandboxRoots.has_value()) {
         return std::nullopt;
     }
 
-    const std::optional<QString> canonicalRoot = resolvedPathForContainment(*sandboxRoot);
-    const std::optional<QString> canonicalCustom =
+    const std::optional<QString> resolvedCustom =
         resolvedPathForContainment(absoluteCustomPath);
-    if (!canonicalRoot.has_value() || !canonicalCustom.has_value()
-        || !pathBelow(*canonicalCustom, *canonicalRoot).has_value()) {
+    if (!resolvedCustom.has_value()) {
         return std::nullopt;
     }
-    return existingLocation(absoluteCustomPath, absoluteCustomPath, sawUnreadable);
+    for (const SandboxPathRoot &root : *sandboxRoots) {
+        if (pathBelow(absoluteCustomPath, root.lexicalRoot).has_value()
+            && pathBelow(*resolvedCustom, root.resolvedRoot).has_value()) {
+            return existingLocation(absoluteCustomPath, absoluteCustomPath, sawUnreadable);
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<QString> customDataDirectory(const RemminaInstance &instance)
@@ -279,14 +348,15 @@ ProfileLocationResult profile_locator_detail::locateProfileDirectoryDetailed(
     const RemminaInstance &instance)
 {
     bool sawUnreadable = false;
-    const std::optional<QString> sandboxRoot = verifiedSandboxRoot(instance);
+    const std::optional<QList<SandboxPathRoot>> sandboxRoots =
+        verifiedSandboxRoots(instance);
 
     if (const std::optional<QString> customPath = customDataDirectory(instance)) {
         std::optional<LocatedProfileDirectory> custom;
         if (instance.kind == InstanceKind::Native) {
             custom = existingLocation(*customPath, *customPath, sawUnreadable);
         } else {
-            custom = sandboxCustomLocation(*customPath, sandboxRoot, sawUnreadable);
+            custom = sandboxCustomLocation(*customPath, sandboxRoots, sawUnreadable);
         }
         if (custom.has_value()) {
             return std::move(*custom);
