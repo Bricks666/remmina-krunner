@@ -7,6 +7,7 @@
 
 #include <QString>
 
+#include <optional>
 #include <variant>
 
 struct LocatedProfileDirectory {
@@ -21,4 +22,13 @@ enum class ProfileLocationError {
 
 using ProfileLocationResult = std::variant<LocatedProfileDirectory, ProfileLocationError>;
 
-[[nodiscard]] ProfileLocationResult locateProfileDirectory(const RemminaInstance &instance);
+namespace profile_locator_detail {
+
+// Preserves the distinction between a missing and an unreadable selected directory.
+[[nodiscard]] ProfileLocationResult locateProfileDirectoryDetailed(
+    const RemminaInstance &instance);
+
+} // namespace profile_locator_detail
+
+[[nodiscard]] std::optional<LocatedProfileDirectory> locateProfileDirectory(
+    const RemminaInstance &instance);

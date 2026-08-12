@@ -262,7 +262,8 @@ std::optional<QString> customDataDirectory(const RemminaInstance &instance)
 
 } // namespace
 
-ProfileLocationResult locateProfileDirectory(const RemminaInstance &instance)
+ProfileLocationResult profile_locator_detail::locateProfileDirectoryDetailed(
+    const RemminaInstance &instance)
 {
     bool sawUnreadable = false;
     const std::optional<QList<PathMapping>> mappings = instance.kind == InstanceKind::Flatpak
@@ -313,4 +314,14 @@ ProfileLocationResult locateProfileDirectory(const RemminaInstance &instance)
         }
     }
     return ProfileLocationError::NotFound;
+}
+
+std::optional<LocatedProfileDirectory> locateProfileDirectory(const RemminaInstance &instance)
+{
+    ProfileLocationResult result =
+        profile_locator_detail::locateProfileDirectoryDetailed(instance);
+    if (auto *location = std::get_if<LocatedProfileDirectory>(&result)) {
+        return std::move(*location);
+    }
+    return std::nullopt;
 }

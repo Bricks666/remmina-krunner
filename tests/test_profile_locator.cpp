@@ -12,6 +12,8 @@
 
 #include <sys/stat.h>
 
+#include <optional>
+
 namespace {
 
 QString makeDirectory(const QString &path)
@@ -103,14 +105,13 @@ void writePreference(const RemminaInstance &instance, const QByteArray &encodedV
                   + encodedValue + QByteArray("\n"));
 }
 
-void compareLocation(const ProfileLocationResult &location,
+void compareLocation(const std::optional<LocatedProfileDirectory> &location,
                      const QString &hostPath,
                      const QString &launchPath)
 {
-    QVERIFY(std::holds_alternative<LocatedProfileDirectory>(location));
-    const LocatedProfileDirectory &located = std::get<LocatedProfileDirectory>(location);
-    QCOMPARE(located.hostPath, QDir::cleanPath(hostPath));
-    QCOMPARE(located.launchPath, QDir::cleanPath(launchPath));
+    QVERIFY(location.has_value());
+    QCOMPARE(location->hostPath, QDir::cleanPath(hostPath));
+    QCOMPARE(location->launchPath, QDir::cleanPath(launchPath));
 }
 
 void compareLocationError(const ProfileLocationResult &location, ProfileLocationError expected)
@@ -187,7 +188,8 @@ void ProfileLocatorTest::unreadableCustomStopsBeforeReadableLegacy()
     const QByteArray encodedCustom = QFile::encodeName(custom);
     QVERIFY(::chmod(encodedCustom.constData(), 0000) == 0);
 
-    const ProfileLocationResult result = locateProfileDirectory(instance);
+    const ProfileLocationResult result =
+        profile_locator_detail::locateProfileDirectoryDetailed(instance);
     QVERIFY(::chmod(encodedCustom.constData(), 0700) == 0);
 
     compareLocationError(result, ProfileLocationError::Unreadable);
@@ -224,7 +226,8 @@ void ProfileLocatorTest::unreadableLegacyStopsBeforeReadableUserData()
     const QByteArray encodedLegacy = QFile::encodeName(legacy);
     QVERIFY(::chmod(encodedLegacy.constData(), 0000) == 0);
 
-    const ProfileLocationResult result = locateProfileDirectory(instance);
+    const ProfileLocationResult result =
+        profile_locator_detail::locateProfileDirectoryDetailed(instance);
     QVERIFY(::chmod(encodedLegacy.constData(), 0700) == 0);
 
     compareLocationError(result, ProfileLocationError::Unreadable);
@@ -241,7 +244,8 @@ void ProfileLocatorTest::unreadableUserDataStopsBeforeNativeSystemRoot()
     const QByteArray encodedUserData = QFile::encodeName(userData);
     QVERIFY(::chmod(encodedUserData.constData(), 0000) == 0);
 
-    const ProfileLocationResult result = locateProfileDirectory(instance);
+    const ProfileLocationResult result =
+        profile_locator_detail::locateProfileDirectoryDetailed(instance);
     QVERIFY(::chmod(encodedUserData.constData(), 0700) == 0);
 
     compareLocationError(result, ProfileLocationError::Unreadable);
@@ -258,7 +262,8 @@ void ProfileLocatorTest::unreadableNativeSystemStopsBeforeLaterSystemRoot()
     const QByteArray encodedFirstSystem = QFile::encodeName(firstSystem);
     QVERIFY(::chmod(encodedFirstSystem.constData(), 0000) == 0);
 
-    const ProfileLocationResult result = locateProfileDirectory(instance);
+    const ProfileLocationResult result =
+        profile_locator_detail::locateProfileDirectoryDetailed(instance);
     QVERIFY(::chmod(encodedFirstSystem.constData(), 0700) == 0);
 
     compareLocationError(result, ProfileLocationError::Unreadable);
@@ -270,7 +275,7 @@ void ProfileLocatorTest::returnsNoLocationWhenNothingExists()
     QVERIFY(temporary.isValid());
     const RemminaInstance instance = nativeInstance(temporary);
 
-    compareLocationError(locateProfileDirectory(instance), ProfileLocationError::NotFound);
+    QVERIFY(!locateProfileDirectory(instance).has_value());
 }
 
 void ProfileLocatorTest::rejectsRelativeCustomRatherThanUsingRunnerWorkingDirectory()
@@ -347,7 +352,9 @@ void ProfileLocatorTest::acceptsReadableDirectorySymlinkAndRejectsFilesAndUnread
     QVERIFY(QDir().rmdir(fallback));
     const QByteArray encodedUnreadable = QFile::encodeName(instance.profiles.legacyHome);
     QVERIFY(::chmod(encodedUnreadable.constData(), 0000) == 0);
-    compareLocationError(locateProfileDirectory(instance), ProfileLocationError::Unreadable);
+    compareLocationError(profile_locator_detail::locateProfileDirectoryDetailed(instance),
+                         ProfileLocationError::Unreadable);
+    QVERIFY(!locateProfileDirectory(instance).has_value());
     QVERIFY(::chmod(encodedUnreadable.constData(), 0700) == 0);
 }
 
@@ -410,8 +417,8 @@ void ProfileLocatorTest::flatpakAndSnapNeverUseNativeSystemRoots()
     const RemminaInstance snap = sandboxInstance(temporary, InstanceKind::Snap);
     makeDirectory(flatpak.profiles.systemDataHomes.constFirst() + QStringLiteral("/remmina"));
 
-    compareLocationError(locateProfileDirectory(flatpak), ProfileLocationError::NotFound);
-    compareLocationError(locateProfileDirectory(snap), ProfileLocationError::NotFound);
+    QVERIFY(!locateProfileDirectory(flatpak).has_value());
+    QVERIFY(!locateProfileDirectory(snap).has_value());
 }
 
 void ProfileLocatorTest::snapKeepsLauncherVisiblePathsUnchanged()
@@ -434,7 +441,7 @@ void ProfileLocatorTest::doesNotCreateDirectoriesOrModifyPreferences()
     writeFile(preferencePath(instance), contents);
     const QFileInfo before(preferencePath(instance));
 
-    compareLocationError(locateProfileDirectory(instance), ProfileLocationError::NotFound);
+    QVERIFY(!locateProfileDirectory(instance).has_value());
 
     QFile preference(preferencePath(instance));
     QVERIFY(preference.open(QIODevice::ReadOnly));

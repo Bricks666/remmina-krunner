@@ -255,7 +255,8 @@ ProfileRepository::ProfileRepository(ProfileParserFunction parser)
 std::variant<ProfileSnapshot, ProfileRepositoryError> ProfileRepository::load(
     const RemminaInstance &instance)
 {
-    ProfileLocationResult locationResult = locateProfileDirectory(instance);
+    ProfileLocationResult locationResult =
+        profile_locator_detail::locateProfileDirectoryDetailed(instance);
     if (const auto *error = std::get_if<ProfileLocationError>(&locationResult)) {
         return *error == ProfileLocationError::Unreadable
             ? ProfileRepositoryError::UnreadableDirectory
