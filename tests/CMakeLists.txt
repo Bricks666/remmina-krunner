@@ -280,6 +280,7 @@ add_test(NAME release_package
         ${TEST_CMP_EXECUTABLE}
         ${TEST_MV_EXECUTABLE}
         ${TEST_TOUCH_EXECUTABLE}
+        ${REMMINA_KRUNNER_PLUGIN_RELATIVE}
 )
 set_tests_properties(release_package PROPERTIES TIMEOUT 60)
 add_test(NAME publish_release

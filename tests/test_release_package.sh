@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: 0BSD
 set -euo pipefail
 
-if [[ $# -ne 18 ]]; then
-    echo "Usage: $0 PACKAGE VALIDATOR SOURCE BINARY PLUGIN DESKTOP SERVICE INSTALL UNINSTALL LAYOUT TAR GZIP SHA FIND STAT CMP MV TOUCH" >&2
+if [[ $# -ne 19 ]]; then
+    echo "Usage: $0 PACKAGE VALIDATOR SOURCE BINARY PLUGIN DESKTOP SERVICE INSTALL UNINSTALL LAYOUT TAR GZIP SHA FIND STAT CMP MV TOUCH PLUGIN_RELATIVE" >&2
     exit 64
 fi
 
@@ -12,10 +12,15 @@ package_script=$1; validate_script=$2; source_root=$3; built_binary=$4
 built_plugin=$5; built_desktop=$6; built_service=$7; built_install=$8
 built_uninstall=$9; layout_file=${10}; tar_command=${11}; gzip_command=${12}
 sha256sum_command=${13}; find_command=${14}; stat_command=${15}
-cmp_command=${16}; mv_command=${17}; touch_command=${18}
-for path in "$@"; do
+cmp_command=${16}; mv_command=${17}; touch_command=${18}; plugin_relative=${19}
+for path in "${@:1:18}"; do
     [[ ${path} == /* ]] || { echo "Test argument is not absolute: ${path}" >&2; exit 64; }
 done
+[[ -n ${plugin_relative} && ${plugin_relative} != /* && ${plugin_relative} != *..* &&
+   ${plugin_relative} == */kcm_remmina_krunner.so ]] || {
+    echo "Configured plugin-relative path is invalid: ${plugin_relative}" >&2
+    exit 64
+}
 
 test_root=$(mktemp -d /tmp/remmina-release-package-test.XXXXXX)
 cleanup() { rm -rf -- "${test_root}"; }
@@ -70,7 +75,7 @@ hash_two=$("${sha256sum_command}" "${output_two}/${archive}"); hash_two=${hash_t
 mapfile -t files < <("${tar_command}" -tzf "${output_one}/${archive}" | sed -n '/\/$/!p' | LC_ALL=C sort)
 expected_files=("${top}/LICENSE" "${top}/LICENSES/0BSD.txt" "${top}/LICENSES/LGPL-2.0-or-later.txt" \
     "${top}/bin/remmina-krunner" "${top}/install.sh" \
-    "${top}/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so" \
+    "${top}/${plugin_relative}" \
     "${top}/share/dbus-1/services/org.remminakrunner.KRunner.service" \
     "${top}/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop" "${top}/uninstall.sh")
 [[ ${files[*]} == "${expected_files[*]}" ]] || { printf 'Unexpected 9-file archive inventory:\n%s\n' "${files[*]}" >&2; exit 1; }
@@ -85,7 +90,7 @@ if "${gzip_command}" -dc -- "${output_one}/${archive}" | LC_ALL=C grep -aE '[0-9
 
 extract=${test_root}/extract; mkdir -p -- "${extract}"; "${tar_command}" -xzf "${output_one}/${archive}" -C "${extract}"
 package_root=${extract}/${top}
-for executable in bin/remmina-krunner install.sh lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so uninstall.sh; do
+for executable in bin/remmina-krunner install.sh "${plugin_relative}" uninstall.sh; do
     [[ $("${stat_command}" -c '%a' -- "${package_root}/${executable}") == 755 ]] || exit 1
 done
 for data in LICENSE LICENSES/0BSD.txt LICENSES/LGPL-2.0-or-later.txt \
