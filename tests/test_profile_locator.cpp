@@ -142,6 +142,8 @@ private slots:
     void flatpakKeepsPerApplicationPathsUnchanged();
     void flatpakAcceptsOnlyCustomPathsWithinVerifiedAppRoot();
     void sandboxCustomPathsRequireVerifiedComponentBoundedRoots();
+    void sandboxCanonicalEscapeFallsBackBeforePermissionCheck();
+    void structuralPathErrorsFallBack();
     void inconsistentSandboxRootsRejectCustomButKeepKnownDefaults();
     void flatpakAndSnapNeverUseNativeSystemRoots();
     void snapKeepsLauncherVisiblePathsAndRestrictsCustomPaths();
@@ -379,6 +381,13 @@ void ProfileLocatorTest::flatpakAcceptsOnlyCustomPathsWithinVerifiedAppRoot()
     writePreference(instance, encodeGlibValue(custom));
     compareLocation(locateProfileDirectory(instance), custom, custom);
 
+    const QString internalTarget =
+        makeDirectory(appRoot + QStringLiteral("/internal-target"));
+    const QString internalLink = appRoot + QStringLiteral("/internal-link");
+    QVERIFY(QFile::link(internalTarget, internalLink));
+    writePreference(instance, encodeGlibValue(internalLink));
+    compareLocation(locateProfileDirectory(instance), internalLink, internalLink);
+
     const QString legacyHost = makeDirectory(instance.profiles.legacyHome);
     QFile::remove(preferencePath(instance));
     compareLocation(locateProfileDirectory(instance), legacyHost, legacyHost);
@@ -417,6 +426,49 @@ void ProfileLocatorTest::sandboxCustomPathsRequireVerifiedComponentBoundedRoots(
         temporary.path() + QStringLiteral("/home/tester/snap/remmina/current2/custom"));
     writePreference(snap, encodeGlibValue(snapBoundary));
     compareLocation(locateProfileDirectory(snap), snapFallback, snapFallback);
+}
+
+void ProfileLocatorTest::sandboxCanonicalEscapeFallsBackBeforePermissionCheck()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const RemminaInstance flatpak = sandboxInstance(temporary, InstanceKind::Flatpak);
+    const QString fallback =
+        makeDirectory(flatpak.profiles.dataHome + QStringLiteral("/remmina"));
+    const QString protectedParent =
+        makeDirectory(temporary.path() + QStringLiteral("/protected-external"));
+    const QString protectedTarget = makeDirectory(protectedParent + QStringLiteral("/profiles"));
+    const QString escape = temporary.path()
+        + QStringLiteral("/home/tester/.var/app/org.remmina.Remmina/protected-escape");
+    QVERIFY(QFile::link(protectedTarget, escape));
+    writePreference(flatpak, encodeGlibValue(escape));
+    const QByteArray encodedProtectedParent = QFile::encodeName(protectedParent);
+    QVERIFY(::chmod(encodedProtectedParent.constData(), 0000) == 0);
+
+    const std::optional<LocatedProfileDirectory> location = locateProfileDirectory(flatpak);
+    QVERIFY(::chmod(encodedProtectedParent.constData(), 0700) == 0);
+
+    compareLocation(location, fallback, fallback);
+}
+
+void ProfileLocatorTest::structuralPathErrorsFallBack()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    RemminaInstance instance = nativeInstance(temporary);
+    const QString fallback =
+        makeDirectory(instance.profiles.dataHome + QStringLiteral("/remmina"));
+    const QString first = temporary.path() + QStringLiteral("/loop-a");
+    const QString second = temporary.path() + QStringLiteral("/loop-b");
+    QVERIFY(QFile::link(second, first));
+    QVERIFY(QFile::link(first, second));
+
+    writePreference(instance, encodeGlibValue(first));
+    compareLocation(locateProfileDirectory(instance), fallback, fallback);
+
+    QFile::remove(preferencePath(instance));
+    instance.profiles.legacyHome = first;
+    compareLocation(locateProfileDirectory(instance), fallback, fallback);
 }
 
 void ProfileLocatorTest::inconsistentSandboxRootsRejectCustomButKeepKnownDefaults()

@@ -27,6 +27,12 @@ enum class DirectoryStatus {
     Readable,
 };
 
+bool isStructuralPathError(int error)
+{
+    return error == ENOENT || error == ENOTDIR || error == ELOOP
+        || error == ENAMETOOLONG;
+}
+
 QString cleanAbsolutePath(const QString &path)
 {
     if (path.isEmpty() || !QDir::isAbsolutePath(path)) {
@@ -60,8 +66,8 @@ DirectoryStatus directoryStatus(const QString &path)
     const int pathStatError = pathStatResult < 0 ? errno : 0;
     if (pathStatResult < 0) {
         encodedPath.fill('\0');
-        return pathStatError == ENOENT || pathStatError == ENOTDIR ? DirectoryStatus::Invalid
-                                                                   : DirectoryStatus::Unreadable;
+        return isStructuralPathError(pathStatError) ? DirectoryStatus::Invalid
+                                                    : DirectoryStatus::Unreadable;
     }
     if (!S_ISDIR(pathMetadata.st_mode)) {
         encodedPath.fill('\0');
@@ -73,9 +79,11 @@ DirectoryStatus directoryStatus(const QString &path)
         accessResult =
             ::faccessat(AT_FDCWD, encodedPath.constData(), R_OK | X_OK, AT_EACCESS);
     } while (accessResult < 0 && errno == EINTR);
+    const int accessError = accessResult < 0 ? errno : 0;
     if (accessResult < 0) {
         encodedPath.fill('\0');
-        return DirectoryStatus::Unreadable;
+        return isStructuralPathError(accessError) ? DirectoryStatus::Invalid
+                                                  : DirectoryStatus::Unreadable;
     }
 
     int descriptor = -1;
@@ -83,9 +91,11 @@ DirectoryStatus directoryStatus(const QString &path)
         descriptor =
             ::open(encodedPath.constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_DIRECTORY);
     } while (descriptor < 0 && errno == EINTR);
+    const int openError = descriptor < 0 ? errno : 0;
     encodedPath.fill('\0');
     if (descriptor < 0) {
-        return DirectoryStatus::Unreadable;
+        return isStructuralPathError(openError) ? DirectoryStatus::Invalid
+                                                : DirectoryStatus::Unreadable;
     }
 
     struct stat metadata {};
@@ -117,6 +127,45 @@ std::optional<QString> pathBelow(const QString &path, const QString &root)
         return std::nullopt;
     }
     return absolutePath.sliced(prefix.size());
+}
+
+std::optional<QString> resolvedPathForContainment(QString path)
+{
+    path = cleanAbsolutePath(path);
+    if (path.isEmpty()) {
+        return std::nullopt;
+    }
+
+    constexpr int maximumSymbolicLinks = 40;
+    for (int followedLinks = 0; followedLinks < maximumSymbolicLinks; ++followedLinks) {
+        const QStringList components = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        QString current = QStringLiteral("/");
+        bool followedLink = false;
+        for (qsizetype index = 0; index < components.size(); ++index) {
+            current = childPath(current, QStringView(components.at(index)));
+            const QFileInfo component(current);
+            if (!component.isSymbolicLink()) {
+                continue;
+            }
+
+            QString target = cleanAbsolutePath(component.symLinkTarget());
+            if (target.isEmpty()) {
+                return std::nullopt;
+            }
+            for (++index; index < components.size(); ++index) {
+                target = childPath(target, QStringView(components.at(index)));
+            }
+            path = std::move(target);
+            followedLink = true;
+            break;
+        }
+        if (!followedLink) {
+            const QString canonical = QFileInfo(path).canonicalFilePath();
+            return canonical.isEmpty() ? std::optional<QString>(path)
+                                       : std::optional<QString>(cleanAbsolutePath(canonical));
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<QString> rootBeforeSuffix(const QString &path, const QString &suffix)
@@ -192,19 +241,15 @@ std::optional<LocatedProfileDirectory> sandboxCustomLocation(
     if (!sandboxRoot.has_value() || !pathBelow(absoluteCustomPath, *sandboxRoot).has_value()) {
         return std::nullopt;
     }
-    std::optional<LocatedProfileDirectory> location =
-        existingLocation(absoluteCustomPath, absoluteCustomPath, sawUnreadable);
-    if (!location.has_value()) {
-        return std::nullopt;
-    }
 
-    const QString canonicalRoot = QFileInfo(*sandboxRoot).canonicalFilePath();
-    const QString canonicalCustom = QFileInfo(absoluteCustomPath).canonicalFilePath();
-    if (canonicalRoot.isEmpty() || canonicalCustom.isEmpty()
-        || !pathBelow(canonicalCustom, canonicalRoot).has_value()) {
+    const std::optional<QString> canonicalRoot = resolvedPathForContainment(*sandboxRoot);
+    const std::optional<QString> canonicalCustom =
+        resolvedPathForContainment(absoluteCustomPath);
+    if (!canonicalRoot.has_value() || !canonicalCustom.has_value()
+        || !pathBelow(*canonicalCustom, *canonicalRoot).has_value()) {
         return std::nullopt;
     }
-    return location;
+    return existingLocation(absoluteCustomPath, absoluteCustomPath, sawUnreadable);
 }
 
 std::optional<QString> customDataDirectory(const RemminaInstance &instance)
