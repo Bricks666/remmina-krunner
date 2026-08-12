@@ -241,6 +241,55 @@ set_tests_properties(build_testing_off PROPERTIES TIMEOUT 120)
 
 find_program(TEST_GIT_EXECUTABLE NAMES git REQUIRED)
 find_program(TEST_ACTIONLINT_EXECUTABLE NAMES actionlint REQUIRED)
+find_program(TEST_TAR_EXECUTABLE NAMES tar REQUIRED)
+find_program(TEST_GZIP_EXECUTABLE NAMES gzip REQUIRED)
+find_program(TEST_SHA256SUM_EXECUTABLE NAMES sha256sum REQUIRED)
+find_program(TEST_FIND_EXECUTABLE NAMES find REQUIRED)
+find_program(TEST_STAT_EXECUTABLE NAMES stat REQUIRED)
+find_program(TEST_CMP_EXECUTABLE NAMES cmp REQUIRED)
+find_program(TEST_MV_EXECUTABLE NAMES mv REQUIRED)
+find_program(TEST_TOUCH_EXECUTABLE NAMES touch REQUIRED)
+
+add_test(NAME release_tag
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_release_tag.sh
+        ${PROJECT_SOURCE_DIR}/scripts/validate_release_tag.sh
+        ${PROJECT_SOURCE_DIR}/CMakeLists.txt
+)
+add_test(NAME release_package
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_release_package.sh
+        ${PROJECT_SOURCE_DIR}/scripts/package_release.sh
+        ${PROJECT_SOURCE_DIR}/scripts/validate_release_tag.sh
+        ${PROJECT_SOURCE_DIR}
+        $<TARGET_FILE:remmina-krunner>
+        $<TARGET_FILE:kcm_remmina_krunner>
+        ${PROJECT_BINARY_DIR}/org.remminakrunner.KRunner.desktop
+        ${PROJECT_BINARY_DIR}/org.remminakrunner.KRunner.service
+        ${PROJECT_BINARY_DIR}/packaging/install.sh
+        ${PROJECT_BINARY_DIR}/packaging/uninstall.sh
+        ${PROJECT_BINARY_DIR}/RemminaKRunnerInstallLayout.cmake
+        ${TEST_TAR_EXECUTABLE}
+        ${TEST_GZIP_EXECUTABLE}
+        ${TEST_SHA256SUM_EXECUTABLE}
+        ${TEST_FIND_EXECUTABLE}
+        ${TEST_STAT_EXECUTABLE}
+        ${TEST_CMP_EXECUTABLE}
+        ${TEST_MV_EXECUTABLE}
+        ${TEST_TOUCH_EXECUTABLE}
+)
+set_tests_properties(release_package PROPERTIES TIMEOUT 60)
+add_test(NAME publish_release
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_publish_release.sh
+        ${PROJECT_SOURCE_DIR}/scripts/publish_release.sh
+)
+set_tests_properties(publish_release PROPERTIES TIMEOUT 60)
+add_test(NAME release_workflow
+    COMMAND ${CMAKE_COMMAND}
+        -DREPO_ROOT=${PROJECT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_release_workflow.cmake
+)
 
 add_test(NAME ci_git_check
     COMMAND ${TEST_BASH_EXECUTABLE}
@@ -268,6 +317,7 @@ add_test(NAME workflow_actionlint
         ${CMAKE_CURRENT_SOURCE_DIR}/test_workflow_actionlint.sh
         ${TEST_ACTIONLINT_EXECUTABLE}
         ${PROJECT_SOURCE_DIR}/.github/workflows/ci.yml
+        ${PROJECT_SOURCE_DIR}/.github/workflows/release.yml
 )
 
 add_test(NAME documentation

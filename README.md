@@ -17,10 +17,9 @@ stay in the checked-in Fedora 44 container image.
 ### Install a verified release
 
 Once a release is published, download both the archive and its checksum from
-the same GitHub Releases page. The names and URL below illustrate the expected
-release layout; until that release exists, use the source installation path in
-the next section. Verify a published archive before extracting or running any
-bundled script:
+the same GitHub Release. For version `v0.1.0`, the exact asset names are
+`remmina-krunner-v0.1.0-linux-x86_64.tar.gz` and its matching `.sha256` file.
+Verify the checksum before extracting or running any bundled script:
 
 ```bash
 version=v0.1.0
@@ -69,6 +68,10 @@ Run `uninstall.sh` from the same verified bundle and with the same
 D-Bus/KRunner metadata, and configuration module; it preserves
 `~/.config/remmina-krunnerrc`, all Remmina profiles, and unrelated files.
 Installing a newer verified bundle performs an atomic user-local upgrade.
+For an upgrade, verify the new archive and checksum first, extract it, and run
+its `install.sh`; do not reuse scripts from a different version. To uninstall,
+run the `uninstall.sh` from a verified bundle with the same installation
+layout.
 
 ## Use
 

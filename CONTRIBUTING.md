@@ -26,6 +26,44 @@ clang-format, and checks Git whitespace in the working tree, index, and CI
 commit range. `sanitize` repeats the suite with ASan and UBSan. `release-build`
 configures with tests disabled and proves the production graph builds.
 
+## Release process
+
+Prepare a local release package through the same Podman wrapper. The timestamp
+must be the release commit time, and the output directory must be a new empty
+directory inside the workspace:
+
+```bash
+release_tag=v0.1.0
+release_commit=$(git rev-parse HEAD)
+export SOURCE_DATE_EPOCH=$(git show -s --format=%ct "${release_commit}")
+mkdir -m 0755 build-release-assets
+./scripts/container.sh release-package "${release_tag}" "${PWD}/build-release-assets"
+```
+
+The wrapper performs a Release build with `BUILD_TESTING=OFF`, creates the
+archive and checksum in the checked-in container, and verifies the exact
+nine-file bundle. Verify and review both assets before tagging. A release tag
+may be lightweight (`git tag v0.1.0`) or annotated
+(`git tag -a v0.1.0 -m 'v0.1.0'`), but it must use canonical
+`vMAJOR.MINOR.PATCH`, match the CMake project version, and point at the tested
+commit. Push the tag only after the commit is final:
+
+```bash
+git push origin v0.1.0
+```
+
+The release workflow repeats check, sanitizer, and reproducible packaging with
+rootless Podman. It transfers only the archive and checksum to a separately
+authorized publication job, which creates or safely updates a **draft** GitHub
+Release. Review its generated notes, asset names, and checksum, then publish it
+manually in GitHub. The automation never publishes a release.
+
+Treat a published release as immutable: never retag a published version,
+replace its assets, or move its tag. If something is wrong, increment the
+project version, repeat verification, and publish a new release. Reruns may
+repair only an unpublished draft whose tag still resolves to the verified
+commit.
+
 The Dev Container uses the same Containerfile and unprivileged `developer`
 account. Configure your editor's container provider to use Podman. The checked-in
 configuration has no project-declared credential or engine-socket mounts and

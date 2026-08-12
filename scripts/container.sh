@@ -30,10 +30,10 @@ cleanup_image_id_file() {
 trap cleanup_image_id_file EXIT
 
 usage() {
-    echo "Usage: $0 {build|configure|test [ctest-regex]|check|sanitize|release-build|source-bundle}" >&2
+    echo "Usage: $0 {build|configure|test [ctest-regex]|check|sanitize|release-build|source-bundle|release-package TAG OUTPUT_DIR}" >&2
 }
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
+if [[ $# -lt 1 || $# -gt 3 ]]; then
     usage
     exit 64
 fi
@@ -45,6 +45,27 @@ case "${mode}" in
             usage
             exit 64
         fi
+        ;;
+    release-package)
+        if [[ $# -ne 3 || ! $2 =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ||
+              $3 != /* || $3 == *$'\n'* || $3 == *$'\r'* ]]; then
+            usage
+            exit 64
+        fi
+        release_output=$(readlink -f -- "$3") || {
+            echo "Release output directory must exist." >&2
+            exit 64
+        }
+        case ${release_output} in
+            "${repository_root}"/*) ;;
+            *) echo "Release output must be within the repository workspace." >&2; exit 64 ;;
+        esac
+        [[ -d ${release_output} && ! -L ${release_output} ]] || {
+            echo "Release output must be a real directory." >&2
+            exit 64
+        }
+        release_relative=${release_output#"${repository_root}"/}
+        set -- "$1" "$2" "/workspace/${release_relative}"
         ;;
     test)
         ;;
@@ -63,6 +84,13 @@ if [[ -n ${CI_DIFF_BASE:-} ]]; then
         exit 64
     fi
     container_environment+=(--env "CI_DIFF_BASE=${CI_DIFF_BASE}")
+fi
+if [[ -n ${SOURCE_DATE_EPOCH:-} ]]; then
+    [[ ${SOURCE_DATE_EPOCH} =~ ^[0-9]+$ ]] || {
+        echo "SOURCE_DATE_EPOCH must be decimal." >&2
+        exit 64
+    }
+    container_environment+=(--env "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}")
 fi
 
 image_id_file=$(mktemp /tmp/remmina-krunner-image-id.XXXXXX)

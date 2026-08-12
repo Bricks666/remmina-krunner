@@ -14,7 +14,7 @@ repository_root=$(cd -- "${script_directory}/.." && pwd -P)
 parallel_jobs=${CMAKE_BUILD_PARALLEL_LEVEL:-2}
 
 usage() {
-    echo "Usage: $0 {build|configure|test [ctest-regex]|check|sanitize|release-build|source-bundle}" >&2
+    echo "Usage: $0 {build|configure|test [ctest-regex]|check|sanitize|release-build|source-bundle|release-package TAG OUTPUT_DIR}" >&2
 }
 
 configure_build() {
@@ -99,16 +99,112 @@ run_check() {
 
 run_sanitize() {
     local build_directory="${repository_root}/build-sanitize"
-    local sanitizer_flags="-fsanitize=address,undefined -fno-omit-frame-pointer"
-    configure_build "${build_directory}" Debug ON \
-        -DCMAKE_CXX_FLAGS="${sanitizer_flags}" \
-        -DCMAKE_EXE_LINKER_FLAGS="${sanitizer_flags}" \
-        -DCMAKE_SHARED_LINKER_FLAGS="${sanitizer_flags}"
+    "${script_directory}/configure_sanitize.sh" "${repository_root}" "${build_directory}"
     cmake --build "${build_directory}" --parallel "${parallel_jobs}"
     ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
         UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
         QT_QPA_PLATFORM=offscreen \
         ctest --test-dir "${build_directory}" --no-tests=error --output-on-failure
+}
+
+release_package() {
+    local release_tag=$1 output_directory=$2
+    local build_directory="${repository_root}/build-release"
+    local temporary_output archive checksum archive_path checksum_path
+    local staged_archive= staged_checksum= archive_identity= checksum_identity=
+    local publication_rollback=0 current_identity
+    [[ ${output_directory} == "${repository_root}"/* &&
+       ${output_directory} != *$'\n'* && ${output_directory} != *$'\r'* ]] || {
+        echo "Release output must be a bounded directory in the workspace." >&2
+        exit 64
+    }
+    if [[ ! -d ${output_directory} || -L ${output_directory} ||
+          -n $(find "${output_directory}" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
+        echo "Release output must be an empty real directory." >&2
+        exit 64
+    fi
+    [[ ${SOURCE_DATE_EPOCH:-} =~ ^[0-9]+$ ]] || {
+        echo "SOURCE_DATE_EPOCH must be set for release packaging." >&2
+        exit 64
+    }
+    configure_build "${build_directory}" Release OFF
+    cmake --build "${build_directory}" --parallel "${parallel_jobs}"
+    temporary_output=$(mktemp -d /tmp/remmina-release-output.XXXXXX)
+    cleanup_release_output() {
+        local path expected
+        if [[ ${publication_rollback} == 1 ]]; then
+            for path in "${archive_path:-}" "${checksum_path:-}"; do
+                [[ ${path} == "${archive_path:-}" ]] && expected=${archive_identity} || expected=${checksum_identity}
+                if [[ -n ${expected} && -f ${path} && ! -L ${path} ]]; then
+                    current_identity=$(stat -c '%d:%i' -- "${path}" 2>/dev/null || true)
+                    [[ ${current_identity} != "${expected}" ]] || rm -f -- "${path}"
+                fi
+            done
+        fi
+        for path in "${staged_archive}" "${staged_checksum}"; do
+            [[ ${path} == "${staged_archive}" ]] && expected=${archive_identity} || expected=${checksum_identity}
+            if [[ -n ${path} && -n ${expected} && -f ${path} && ! -L ${path} ]]; then
+                current_identity=$(stat -c '%d:%i' -- "${path}" 2>/dev/null || true)
+                [[ ${current_identity} != "${expected}" ]] || rm -f -- "${path}"
+            fi
+        done
+        if [[ -n ${temporary_output} && ${temporary_output} == /tmp/remmina-release-output.* &&
+              -d ${temporary_output} && ! -L ${temporary_output} ]]; then
+            rm -rf -- "${temporary_output}"
+        fi
+    }
+    trap cleanup_release_output EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    "${script_directory}/package_release.sh" "${repository_root}" "${build_directory}" \
+        "${temporary_output}" "${release_tag}"
+    archive=remmina-krunner-${release_tag}-linux-x86_64.tar.gz
+    checksum=${archive}.sha256
+    archive_path=${output_directory}/${archive}
+    checksum_path=${output_directory}/${checksum}
+    staged_archive=$(mktemp "${output_directory}/.${archive}.stage.XXXXXX")
+    archive_identity=$(stat -c '%d:%i' -- "${staged_archive}")
+    staged_checksum=$(mktemp "${output_directory}/.${checksum}.stage.XXXXXX")
+    checksum_identity=$(stat -c '%d:%i' -- "${staged_checksum}")
+    cp --no-preserve=all -- "${temporary_output}/${archive}" "${staged_archive}"
+    cp --no-preserve=all -- "${temporary_output}/${checksum}" "${staged_checksum}"
+    chmod 0644 -- "${staged_archive}" "${staged_checksum}"
+    [[ $(stat -c '%d:%i' -- "${staged_archive}") == "${archive_identity}" &&
+       $(stat -c '%d:%i' -- "${staged_checksum}") == "${checksum_identity}" ]] || {
+        echo "Release staging files changed while being populated." >&2
+        exit 73
+    }
+    [[ ! -e ${archive_path} && ! -L ${archive_path} &&
+       ! -e ${checksum_path} && ! -L ${checksum_path} ]] || {
+        echo "Release output collision occurred during publication." >&2
+        exit 73
+    }
+    publication_rollback=1
+    mv -n -T -- "${staged_archive}" "${archive_path}"
+    [[ ! -e ${staged_archive} && -f ${archive_path} && ! -L ${archive_path} &&
+       $(stat -c '%d:%i' -- "${archive_path}") == "${archive_identity}" ]] || {
+        echo "Unable to publish release archive without replacement." >&2
+        exit 73
+    }
+    staged_archive=
+    mv -n -T -- "${staged_checksum}" "${checksum_path}"
+    [[ ! -e ${staged_checksum} && -f ${checksum_path} && ! -L ${checksum_path} &&
+       $(stat -c '%d:%i' -- "${checksum_path}") == "${checksum_identity}" ]] || {
+        echo "Unable to publish release checksum without replacement." >&2
+        exit 73
+    }
+    staged_checksum=
+    (cd -- "${output_directory}"; sha256sum --check "${checksum}" >/dev/null)
+    [[ $(stat -c '%d:%i' -- "${archive_path}") == "${archive_identity}" &&
+       $(stat -c '%d:%i' -- "${checksum_path}") == "${checksum_identity}" ]] || {
+        echo "Published release assets changed during verification." >&2
+        exit 73
+    }
+    publication_rollback=0
+    cleanup_release_output
+    temporary_output=
+    trap - EXIT HUP INT TERM
 }
 
 release_build() {
@@ -174,7 +270,7 @@ source_bundle() {
         "${bundle_root}/${bundle_prefix}"
 }
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
+if [[ $# -lt 1 || $# -gt 3 ]]; then
     usage
     exit 64
 fi
@@ -206,6 +302,10 @@ case "$1" in
     source-bundle)
         [[ $# -eq 1 ]] || { usage; exit 64; }
         source_bundle
+        ;;
+    release-package)
+        [[ $# -eq 3 ]] || { usage; exit 64; }
+        release_package "$2" "$3"
         ;;
     *)
         usage

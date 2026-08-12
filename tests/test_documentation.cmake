@@ -50,6 +50,9 @@ foreach(NEEDLE IN ITEMS
     "manual Plasma"
     "./scripts/container.sh source-bundle"
     "./build-source-bundle/remmina-krunner/install.sh"
+    "remmina-krunner-v0.1.0-linux-x86_64.tar.gz"
+    "checksum"
+    "upgrade"
 )
     assert_contains("${README_TEXT}" "README.md" "${NEEDLE}")
 endforeach()
@@ -64,6 +67,13 @@ foreach(NEEDLE IN ITEMS
     "./scripts/container.sh check"
     "./scripts/container.sh sanitize"
     "./scripts/container.sh release-build"
+    "./scripts/container.sh release-package"
+    "SOURCE_DATE_EPOCH"
+    "annotated"
+    "lightweight"
+    "draft"
+    "published"
+    "retag"
     "RED"
     "GREEN"
     "synthetic"
