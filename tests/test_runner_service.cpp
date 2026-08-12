@@ -354,7 +354,7 @@ void RunnerServiceTest::ignoredAndCreationQueriesTouchNoSources()
     QCOMPARE(matches.size(), 1);
     const RemoteMatch &match = matches.constFirst();
     QCOMPARE(match.id, QStringLiteral("action:new"));
-    QCOMPARE(match.text, QStringLiteral("Create a Remmina connection"));
+    QCOMPARE(match.text, QStringLiteral("Create a new Remmina connection"));
     QCOMPARE(match.iconName, QStringLiteral("org.remmina.Remmina"));
     QCOMPARE(match.categoryRelevance, exactMatch);
     QCOMPARE(match.relevance, 1.0);

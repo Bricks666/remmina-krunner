@@ -65,7 +65,7 @@ RemoteMatches creationResult()
 {
     return {{
         QString{newActionId},
-        QStringLiteral("Create a Remmina connection"),
+        QStringLiteral("Create a new Remmina connection"),
         QString{iconName},
         exactMatch,
         1.0,
