@@ -11,7 +11,7 @@ set(CMAKE_AUTOMOC ON)
 
 include(CTest)
 
-find_package(Qt6 6.7 REQUIRED COMPONENTS Core)
+find_package(Qt6 6.7 REQUIRED COMPONENTS Core DBus)
 find_package(KF6Config REQUIRED)
 
 add_library(remmina_krunner_core STATIC
@@ -24,7 +24,10 @@ add_library(remmina_krunner_core STATIC
     src/core/profile_locator.cpp
     src/core/profile_parser.cpp
     src/core/profile_repository.cpp
+    src/core/remmina_launcher.cpp
     src/core/selection_policy.cpp
+    src/platform/freedesktop_notifier.cpp
+    src/platform/qt_process_launcher.cpp
     src/platform/qt_process_probe.cpp
     src/platform/qt_profile_watcher.cpp
 )
@@ -32,7 +35,7 @@ set_target_properties(remmina_krunner_core PROPERTIES POSITION_INDEPENDENT_CODE 
 target_include_directories(remmina_krunner_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(remmina_krunner_core
     PUBLIC Qt6::Core
-    PRIVATE KF6::ConfigCore
+    PRIVATE KF6::ConfigCore Qt6::DBus
 )
 
 if(BUILD_TESTING)

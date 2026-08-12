@@ -79,6 +79,25 @@ add_dependencies(test_qt_process_probe process_probe_helper)
 
 add_test(NAME qt_process_probe COMMAND test_qt_process_probe)
 
+add_executable(test_remmina_launcher test_remmina_launcher.cpp)
+target_link_libraries(test_remmina_launcher PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME remmina_launcher COMMAND test_remmina_launcher)
+
+add_executable(process_launcher_helper process_launcher_helper.cpp)
+target_link_libraries(process_launcher_helper PRIVATE Qt6::Core)
+
+add_executable(test_qt_process_launcher test_qt_process_launcher.cpp)
+target_compile_definitions(test_qt_process_launcher
+    PRIVATE PROCESS_LAUNCHER_HELPER_PATH="$<TARGET_FILE:process_launcher_helper>"
+)
+target_link_libraries(test_qt_process_launcher
+    PRIVATE remmina_krunner_core Qt6::Test
+)
+add_dependencies(test_qt_process_launcher process_launcher_helper)
+
+add_test(NAME qt_process_launcher COMMAND test_qt_process_launcher)
+
 find_program(TEST_BASH_EXECUTABLE NAMES bash REQUIRED)
 add_test(NAME ci_no_tests_error
     COMMAND ${TEST_BASH_EXECUTABLE}

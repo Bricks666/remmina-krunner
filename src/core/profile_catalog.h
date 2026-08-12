@@ -20,7 +20,13 @@ enum class ProfileCatalogError {
 
 using CatalogResult = std::variant<QList<ProfileRecord>, ProfileCatalogError>;
 
-class ProfileCatalog {
+class ProfileCatalogSource {
+public:
+    virtual ~ProfileCatalogSource() = default;
+    [[nodiscard]] virtual const ProfileRecord *resolve(QStringView opaqueId) const = 0;
+};
+
+class ProfileCatalog final : public ProfileCatalogSource {
 public:
     // The catalog is same-thread confined. Dependencies are non-owning, are used on
     // that same thread, and must outlive the catalog.
@@ -36,7 +42,7 @@ public:
     // retry-safe. reset() and destruction contain watcher cleanup exceptions.
     [[nodiscard]] CatalogResult records(const RemminaInstance &instance);
     // The returned pointer remains valid only until the next mutating catalog call.
-    [[nodiscard]] const ProfileRecord *resolve(QStringView opaqueId) const;
+    [[nodiscard]] const ProfileRecord *resolve(QStringView opaqueId) const override;
     void markDirty() noexcept;
     void endSession();
     void reset() noexcept;

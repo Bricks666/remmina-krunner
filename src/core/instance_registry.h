@@ -17,13 +17,19 @@ struct RegistrySnapshot {
     QStringList failedBackends;
 };
 
-class InstanceRegistry {
+class InstanceRegistrySource {
+public:
+    virtual ~InstanceRegistrySource() = default;
+    [[nodiscard]] virtual RegistrySnapshot snapshot() const = 0;
+};
+
+class InstanceRegistry final : public InstanceRegistrySource {
 public:
     // Both dependencies are non-owning and must outlive the registry.
     InstanceRegistry(InstanceScanSource &scanSource, SelectionStore &selectionStore);
 
     RegistrySnapshot rescanAndRepair();
-    [[nodiscard]] RegistrySnapshot snapshot() const;
+    [[nodiscard]] RegistrySnapshot snapshot() const override;
     bool select(QStringView id);
 
 private:
