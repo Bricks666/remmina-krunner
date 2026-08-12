@@ -87,7 +87,7 @@ An instance descriptor contains:
 - user-facing description;
 - exact launcher and fixed launcher prefix arguments;
 - configuration and data environment;
-- profile-path mapping needed by its sandbox; and
+- verified profile roots visible to its sandbox; and
 - deterministic priority within its packaging type.
 
 The scanner discovers applications, never profiles:
@@ -171,9 +171,14 @@ Within that environment, profile location mirrors Remmina's precedence:
 4. applicable native system data directories.
 
 Only regular or Remmina-compatible linked files ending in `.remmina` are
-offered to the parser. Paths passed during activation are translated to the
-selected sandbox's view when needed. Profile discovery is read-only and never
-creates a missing Remmina directory.
+offered to the parser. Flatpak's per-application XDG paths below
+`~/.var/app/org.remmina.Remmina` and Snap's paths below
+`~/snap/remmina/current` are already launcher-visible, so their host and launch
+paths remain identical. A sandbox custom path is accepted only when it is
+component-safely beneath the consistent root derived from that instance's
+known profile locations; an arbitrary host-readable path is not assumed to be
+sandbox-visible. Profile discovery is read-only and never creates a missing
+Remmina directory.
 
 ## Profile parsing and privacy
 
@@ -387,7 +392,7 @@ configuration, clock, watcher, notifier, and launcher boundaries:
 
 - native, Flatpak, and Snap configuration/data roots;
 - custom data-directory and legacy precedence;
-- sandbox-visible activation path mapping;
+- component-safe sandbox-root validation and host-equal activation paths;
 - valid, incomplete, malformed, linked, removed, and unreadable fixtures;
 - label splitting and display preservation;
 - proof that passwords and unrelated settings are not retained or returned.

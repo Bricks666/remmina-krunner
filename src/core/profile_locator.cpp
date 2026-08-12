@@ -19,11 +19,7 @@
 namespace {
 
 constexpr auto flatpakApplicationRoot = "/.var/app/org.remmina.Remmina";
-
-struct PathMapping {
-    QString hostRoot;
-    QString launchRoot;
-};
+constexpr auto snapApplicationRoot = "/snap/remmina/current";
 
 enum class DirectoryStatus {
     Invalid,
@@ -64,8 +60,8 @@ DirectoryStatus directoryStatus(const QString &path)
     const int pathStatError = pathStatResult < 0 ? errno : 0;
     if (pathStatResult < 0) {
         encodedPath.fill('\0');
-        return pathStatError == EACCES || pathStatError == EPERM ? DirectoryStatus::Unreadable
-                                                                 : DirectoryStatus::Invalid;
+        return pathStatError == ENOENT || pathStatError == ENOTDIR ? DirectoryStatus::Invalid
+                                                                   : DirectoryStatus::Unreadable;
     }
     if (!S_ISDIR(pathMetadata.st_mode)) {
         encodedPath.fill('\0');
@@ -77,11 +73,9 @@ DirectoryStatus directoryStatus(const QString &path)
         accessResult =
             ::faccessat(AT_FDCWD, encodedPath.constData(), R_OK | X_OK, AT_EACCESS);
     } while (accessResult < 0 && errno == EINTR);
-    const int accessError = accessResult < 0 ? errno : 0;
     if (accessResult < 0) {
         encodedPath.fill('\0');
-        return accessError == EACCES || accessError == EPERM ? DirectoryStatus::Unreadable
-                                                             : DirectoryStatus::Invalid;
+        return DirectoryStatus::Unreadable;
     }
 
     int descriptor = -1;
@@ -99,9 +93,11 @@ DirectoryStatus directoryStatus(const QString &path)
     do {
         statResult = ::fstat(descriptor, &metadata);
     } while (statResult < 0 && errno == EINTR);
-    const bool readableDirectory = statResult == 0 && S_ISDIR(metadata.st_mode);
     ::close(descriptor);
-    return readableDirectory ? DirectoryStatus::Readable : DirectoryStatus::Invalid;
+    if (statResult < 0) {
+        return DirectoryStatus::Unreadable;
+    }
+    return S_ISDIR(metadata.st_mode) ? DirectoryStatus::Readable : DirectoryStatus::Invalid;
 }
 
 std::optional<QString> pathBelow(const QString &path, const QString &root)
@@ -123,58 +119,51 @@ std::optional<QString> pathBelow(const QString &path, const QString &root)
     return absolutePath.sliced(prefix.size());
 }
 
-QString appendRelativePath(const QString &root, const QString &relativePath)
+std::optional<QString> rootBeforeSuffix(const QString &path, const QString &suffix)
 {
-    return relativePath.isEmpty() ? cleanAbsolutePath(root)
-                                  : childPath(root, QStringView(relativePath));
-}
-
-std::optional<QString> flatpakHostHome(const RemminaInstance &instance)
-{
-    const QString suffixBase = QString::fromLatin1(flatpakApplicationRoot);
-    const QList<std::pair<QString, QString>> roots{
-        {instance.profiles.configHome, suffixBase + QStringLiteral("/config")},
-        {instance.profiles.dataHome, suffixBase + QStringLiteral("/data")},
-        {instance.profiles.legacyHome, suffixBase + QStringLiteral("/.remmina")},
-    };
-
-    std::optional<QString> home;
-    for (const auto &[root, suffix] : roots) {
-        const QString absoluteRoot = cleanAbsolutePath(root);
-        if (absoluteRoot.size() <= suffix.size()
-            || !absoluteRoot.endsWith(suffix, Qt::CaseSensitive)) {
-            return std::nullopt;
-        }
-        const QString candidateHome = absoluteRoot.first(absoluteRoot.size() - suffix.size());
-        if (candidateHome.isEmpty() || !QDir::isAbsolutePath(candidateHome)
-            || (home.has_value() && *home != candidateHome)) {
-            return std::nullopt;
-        }
-        home = candidateHome;
-    }
-    return home;
-}
-
-std::optional<QList<PathMapping>> flatpakMappings(const RemminaInstance &instance)
-{
-    const std::optional<QString> home = flatpakHostHome(instance);
-    if (!home.has_value()) {
+    const QString absolutePath = cleanAbsolutePath(path);
+    if (absolutePath.size() <= suffix.size()
+        || !absolutePath.endsWith(suffix, Qt::CaseSensitive)) {
         return std::nullopt;
     }
-    return QList<PathMapping>{
-        {
-            .hostRoot = cleanAbsolutePath(instance.profiles.dataHome),
-            .launchRoot = childPath(*home, u".local/share"),
-        },
-        {
-            .hostRoot = cleanAbsolutePath(instance.profiles.configHome),
-            .launchRoot = childPath(*home, u".config"),
-        },
-        {
-            .hostRoot = cleanAbsolutePath(instance.profiles.legacyHome),
-            .launchRoot = childPath(*home, u".remmina"),
-        },
-    };
+    const QString root = absolutePath.first(absolutePath.size() - suffix.size());
+    return root.isEmpty() || !QDir::isAbsolutePath(root) ? std::nullopt
+                                                         : std::optional<QString>(root);
+}
+
+std::optional<QString> verifiedSandboxRoot(const RemminaInstance &instance)
+{
+    QString expectedRootSuffix;
+    QList<std::pair<QString, QString>> roots;
+    if (instance.kind == InstanceKind::Flatpak) {
+        expectedRootSuffix = QString::fromLatin1(flatpakApplicationRoot);
+        roots = {
+            {instance.profiles.configHome, QStringLiteral("/config")},
+            {instance.profiles.dataHome, QStringLiteral("/data")},
+            {instance.profiles.legacyHome, QStringLiteral("/.remmina")},
+        };
+    } else if (instance.kind == InstanceKind::Snap) {
+        expectedRootSuffix = QString::fromLatin1(snapApplicationRoot);
+        roots = {
+            {instance.profiles.configHome, QStringLiteral("/.config")},
+            {instance.profiles.dataHome, QStringLiteral("/.local/share")},
+            {instance.profiles.legacyHome, QStringLiteral("/.remmina")},
+        };
+    } else {
+        return std::nullopt;
+    }
+
+    std::optional<QString> commonRoot;
+    for (const auto &[root, suffix] : roots) {
+        const std::optional<QString> candidateRoot = rootBeforeSuffix(root, suffix);
+        if (!candidateRoot.has_value()
+            || !candidateRoot->endsWith(expectedRootSuffix, Qt::CaseSensitive)
+            || (commonRoot.has_value() && *commonRoot != *candidateRoot)) {
+            return std::nullopt;
+        }
+        commonRoot = candidateRoot;
+    }
+    return commonRoot;
 }
 
 std::optional<LocatedProfileDirectory> existingLocation(
@@ -196,47 +185,26 @@ std::optional<LocatedProfileDirectory> existingLocation(
     };
 }
 
-std::optional<LocatedProfileDirectory> flatpakCustomLocation(
-    const QString &customPath, const QList<PathMapping> &mappings, bool &sawUnreadable)
+std::optional<LocatedProfileDirectory> sandboxCustomLocation(
+    const QString &customPath, const std::optional<QString> &sandboxRoot, bool &sawUnreadable)
 {
     const QString absoluteCustomPath = cleanAbsolutePath(customPath);
-    if (absoluteCustomPath.isEmpty()) {
+    if (!sandboxRoot.has_value() || !pathBelow(absoluteCustomPath, *sandboxRoot).has_value()) {
+        return std::nullopt;
+    }
+    std::optional<LocatedProfileDirectory> location =
+        existingLocation(absoluteCustomPath, absoluteCustomPath, sawUnreadable);
+    if (!location.has_value()) {
         return std::nullopt;
     }
 
-    for (const PathMapping &mapping : mappings) {
-        if (const std::optional<QString> relative =
-                pathBelow(absoluteCustomPath, mapping.launchRoot)) {
-            return existingLocation(appendRelativePath(mapping.hostRoot, *relative),
-                                    absoluteCustomPath,
-                                    sawUnreadable);
-        }
+    const QString canonicalRoot = QFileInfo(*sandboxRoot).canonicalFilePath();
+    const QString canonicalCustom = QFileInfo(absoluteCustomPath).canonicalFilePath();
+    if (canonicalRoot.isEmpty() || canonicalCustom.isEmpty()
+        || !pathBelow(canonicalCustom, canonicalRoot).has_value()) {
+        return std::nullopt;
     }
-    for (const PathMapping &mapping : mappings) {
-        if (const std::optional<QString> relative =
-                pathBelow(absoluteCustomPath, mapping.hostRoot)) {
-            return existingLocation(absoluteCustomPath,
-                                    appendRelativePath(mapping.launchRoot, *relative),
-                                    sawUnreadable);
-        }
-    }
-
-    return existingLocation(absoluteCustomPath, absoluteCustomPath, sawUnreadable);
-}
-
-std::optional<LocatedProfileDirectory> flatpakHostLocation(
-    const QString &hostPath, const QList<PathMapping> &mappings, bool &sawUnreadable)
-{
-    const QString absoluteHostPath = cleanAbsolutePath(hostPath);
-    for (const PathMapping &mapping : mappings) {
-        if (const std::optional<QString> relative =
-                pathBelow(absoluteHostPath, mapping.hostRoot)) {
-            return existingLocation(absoluteHostPath,
-                                    appendRelativePath(mapping.launchRoot, *relative),
-                                    sawUnreadable);
-        }
-    }
-    return std::nullopt;
+    return location;
 }
 
 std::optional<QString> customDataDirectory(const RemminaInstance &instance)
@@ -266,18 +234,14 @@ ProfileLocationResult profile_locator_detail::locateProfileDirectoryDetailed(
     const RemminaInstance &instance)
 {
     bool sawUnreadable = false;
-    const std::optional<QList<PathMapping>> mappings = instance.kind == InstanceKind::Flatpak
-        ? flatpakMappings(instance)
-        : std::optional<QList<PathMapping>>{};
+    const std::optional<QString> sandboxRoot = verifiedSandboxRoot(instance);
 
     if (const std::optional<QString> customPath = customDataDirectory(instance)) {
         std::optional<LocatedProfileDirectory> custom;
-        if (instance.kind == InstanceKind::Flatpak && mappings.has_value()) {
-            custom = flatpakCustomLocation(*customPath, *mappings, sawUnreadable);
-        } else if (instance.kind != InstanceKind::Flatpak) {
+        if (instance.kind == InstanceKind::Native) {
             custom = existingLocation(*customPath, *customPath, sawUnreadable);
         } else {
-            custom = existingLocation(*customPath, *customPath, sawUnreadable);
+            custom = sandboxCustomLocation(*customPath, sandboxRoot, sawUnreadable);
         }
         if (custom.has_value()) {
             return std::move(*custom);
@@ -298,14 +262,8 @@ ProfileLocationResult profile_locator_detail::locateProfileDirectoryDetailed(
     }
 
     for (const QString &hostCandidate : hostCandidates) {
-        std::optional<LocatedProfileDirectory> location;
-        if (instance.kind == InstanceKind::Flatpak) {
-            if (mappings.has_value()) {
-                location = flatpakHostLocation(hostCandidate, *mappings, sawUnreadable);
-            }
-        } else {
-            location = existingLocation(hostCandidate, hostCandidate, sawUnreadable);
-        }
+        std::optional<LocatedProfileDirectory> location =
+            existingLocation(hostCandidate, hostCandidate, sawUnreadable);
         if (location.has_value()) {
             return std::move(*location);
         }

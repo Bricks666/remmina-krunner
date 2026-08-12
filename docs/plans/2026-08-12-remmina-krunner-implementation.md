@@ -560,7 +560,8 @@ std::optional<LocatedProfileDirectory> locateProfileDirectory(
 Build temporary native, Flatpak, and Snap homes. Test valid custom
 `datadir_path`, nonexistent custom fallback, legacy fallback, XDG data
 fallback, applicable native system-data fallback, no directory, relative and
-escaped preference values, and sandbox launch-path mapping.
+escaped preference values, host-equal Flatpak/Snap launch paths, component-safe
+sandbox roots, and rejection of external custom sandbox paths.
 
 **Step 2: Write failing repository tests**
 
@@ -597,8 +598,11 @@ Enumerate without changing the directory. Generate opaque IDs from a
 collision-resistant hash of stable instance ID plus canonical profile identity;
 never expose the hash input over D-Bus.
 
-Cache parsed records by fingerprint so unchanged files are not reparsed on a
-new snapshot verification.
+Cache parsed records only for the current instance-directory scope. Compare an
+internal device/inode/size/nanosecond-mtime/ctime signature, do not cache
+transient unreadable results, and revalidate identity and signature after
+parsing with one bounded retry so stale output cannot poison the cache. The
+repository is single-thread confined.
 
 **Step 4: Verify and commit**
 

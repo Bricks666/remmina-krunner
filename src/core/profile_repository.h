@@ -42,6 +42,7 @@ namespace profile_repository_detail {
 
 class ProfileRepository {
 public:
+    // A repository retains mutable parse-cache state and must remain confined to one thread.
     explicit ProfileRepository(ProfileParserFunction parser = parseRemminaProfile);
 
     [[nodiscard]] std::variant<ProfileSnapshot, ProfileRepositoryError> load(
@@ -53,9 +54,19 @@ private:
         QString directory;
         QString canonicalIdentity;
         FileFingerprint fingerprint;
+        quint64 device;
+        quint64 inode;
+        qint64 size;
+        qint64 modifiedSeconds;
+        qint64 modifiedNanoseconds;
+        qint64 changedSeconds;
+        qint64 changedNanoseconds;
         ProfileParseResult result;
     };
 
     ProfileParserFunction parser_;
     QHash<QString, CacheEntry> cache_;
+    QString activeInstanceId_;
+    QString activeDirectory_;
+    bool hasActiveScope_ = false;
 };

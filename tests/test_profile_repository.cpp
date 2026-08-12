@@ -139,6 +139,11 @@ private slots:
     void skipsEveryParserErrorAndFingerprintsFailedProfiles();
     void defaultParserLoadsValidAndSkipsMalformedProfiles();
     void returnsEmptySnapshotForReadableEmptyDirectory();
+    void transientUnreadableParseErrorRetriesWithoutFingerprintChange();
+    void equalSizeReplacementWithSamePublicMtimeReparses();
+    void parserMutationCannotPoisonCacheOrOpaqueIdentity();
+    void repeatedlyChangingCandidateIsBoundedAndRetriedNextLoad();
+    void scopeChangesEvictPriorCache();
     void distinguishesMissingFromUnreadableDirectory();
     void doesNotMutateDirectoryOrProfile();
     void keepsOpaqueIdsStablePrivateAndUnambiguouslyFramed();
@@ -146,7 +151,6 @@ private slots:
     void sizeAndModificationTimeChangesReparseOnlyChangedCandidate();
     void newAndRemovedCandidatesUpdateCacheAndEvictRemovedEntries();
     void cachedErrorRetriesOnlyAfterFingerprintChange();
-    void cacheIsIsolatedByInstanceIdAndLocatedDirectory();
 };
 
 void ProfileRepositoryTest::filtersSuffixAndFileTypesSortsAndDeduplicatesAliases()
@@ -202,8 +206,7 @@ void ProfileRepositoryTest::passesFlatpakHostAndLaunchPathsAndOpaqueIdsToParser(
 
     QCOMPARE(calls.size(), 1);
     QCOMPARE(calls.constFirst().sourcePath, source);
-    QCOMPARE(calls.constFirst().launchPath,
-             temporary.path() + QStringLiteral("/home/tester/.local/share/remmina/mapped.remmina"));
+    QCOMPARE(calls.constFirst().launchPath, source);
     QVERIFY(!calls.constFirst().opaqueId.isEmpty());
     QCOMPARE(snapshot.profiles.constFirst().opaqueId, calls.constFirst().opaqueId);
 }
@@ -279,6 +282,102 @@ void ProfileRepositoryTest::returnsEmptySnapshotForReadableEmptyDirectory()
     QVERIFY(snapshot.fingerprint.isEmpty());
 }
 
+void ProfileRepositoryTest::equalSizeReplacementWithSamePublicMtimeReparses()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const RemminaInstance instance = nativeInstance(temporary.path());
+    const QString directory = makeDirectory(profileDirectory(instance));
+    const QString profile = writeProfile(directory, u"replace.remmina", u"First");
+    const qint64 originalSize = QFileInfo(profile).size();
+    const qint64 originalModified = QFileInfo(profile).lastModified().toMSecsSinceEpoch();
+    int parseCount = 0;
+    ProfileRepository repository(
+        [&parseCount](const QString &source, const QString &launch, QString opaqueId) {
+            ++parseCount;
+            return ProfileParseResult(successfulRecord(source, launch, opaqueId));
+        });
+
+    snapshotFrom(repository.load(instance));
+    const QString staged = writeProfile(directory, u"replacement.tmp", u"Other");
+    QCOMPARE(QFileInfo(staged).size(), originalSize);
+    setModifiedMilliseconds(staged, originalModified);
+    QVERIFY(QFile::remove(profile));
+    QVERIFY(QFile::rename(staged, profile));
+    QCOMPARE(QFileInfo(profile).size(), originalSize);
+    QCOMPARE(QFileInfo(profile).lastModified().toMSecsSinceEpoch(), originalModified);
+
+    snapshotFrom(repository.load(instance));
+    QCOMPARE(parseCount, 2);
+}
+
+void ProfileRepositoryTest::parserMutationCannotPoisonCacheOrOpaqueIdentity()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const RemminaInstance instance = nativeInstance(temporary.path());
+    const QString directory = makeDirectory(profileDirectory(instance));
+    const QString firstTarget = writeProfile(directory, u"target-a", u"First");
+    const QString secondTarget = writeProfile(directory, u"target-b", u"Other");
+    const QString alias = directory + QStringLiteral("/alias.remmina");
+    QVERIFY(QFile::link(firstTarget, alias));
+    int parseCount = 0;
+    bool mutationSucceeded = false;
+    ProfileRepository repository(
+        [&](const QString &source, const QString &launch, QString opaqueId) {
+            ++parseCount;
+            if (parseCount == 1) {
+                mutationSucceeded = QFile::remove(alias) && QFile::link(secondTarget, alias);
+            }
+            return ProfileParseResult(successfulRecord(source, launch, opaqueId));
+        });
+
+    const ProfileSnapshot firstLoad = snapshotFrom(repository.load(instance));
+    QVERIFY(mutationSucceeded);
+    QCOMPARE(parseCount, 2);
+    QCOMPARE(firstLoad.profiles.size(), 1);
+    const QString secondIdentity = QFileInfo(secondTarget).canonicalFilePath();
+    QCOMPARE(firstLoad.profiles.constFirst().opaqueId,
+             profile_repository_detail::opaqueProfileId(QStringView(instance.id),
+                                                         QStringView(secondIdentity)));
+    QCOMPARE(firstLoad.fingerprint.constFirst().path, secondIdentity);
+
+    snapshotFrom(repository.load(instance));
+    QCOMPARE(parseCount, 2);
+}
+
+void ProfileRepositoryTest::repeatedlyChangingCandidateIsBoundedAndRetriedNextLoad()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const RemminaInstance instance = nativeInstance(temporary.path());
+    const QString directory = makeDirectory(profileDirectory(instance));
+    const QString firstTarget = writeProfile(directory, u"target-a", u"First");
+    const QString secondTarget = writeProfile(directory, u"target-b", u"Other");
+    const QString alias = directory + QStringLiteral("/alias.remmina");
+    QVERIFY(QFile::link(firstTarget, alias));
+    int parseCount = 0;
+    ProfileRepository repository(
+        [&](const QString &source, const QString &launch, QString opaqueId) {
+            ++parseCount;
+            const QString nextTarget = parseCount % 2 == 1 ? secondTarget : firstTarget;
+            if (!QFile::remove(alias) || !QFile::link(nextTarget, alias)) {
+                qFatal("Unable to retarget changing repository fixture");
+            }
+            return ProfileParseResult(successfulRecord(source, launch, opaqueId));
+        });
+
+    const ProfileSnapshot firstLoad = snapshotFrom(repository.load(instance));
+    QVERIFY(firstLoad.profiles.isEmpty());
+    QCOMPARE(firstLoad.fingerprint.size(), 1);
+    QCOMPARE(parseCount, 2);
+
+    const ProfileSnapshot secondLoad = snapshotFrom(repository.load(instance));
+    QVERIFY(secondLoad.profiles.isEmpty());
+    QCOMPARE(secondLoad.fingerprint.size(), 1);
+    QCOMPARE(parseCount, 4);
+}
+
 void ProfileRepositoryTest::distinguishesMissingFromUnreadableDirectory()
 {
     QTemporaryDir temporary;
@@ -323,11 +422,12 @@ void ProfileRepositoryTest::distinguishesMissingFromUnreadableDirectory()
                         directory + QStringLiteral("/protected-link.remmina")));
     const QByteArray encodedProtectedParent = QFile::encodeName(protectedParent);
     QVERIFY(::chmod(encodedProtectedParent.constData(), 0000) == 0);
-    const auto inaccessibleEntry = repository.load(instance);
+    const ProfileSnapshot inaccessibleEntry = snapshotFrom(repository.load(instance));
     QVERIFY(::chmod(encodedProtectedParent.constData(), 0700) == 0);
-    QVERIFY(std::holds_alternative<ProfileRepositoryError>(inaccessibleEntry));
-    QCOMPARE(std::get<ProfileRepositoryError>(inaccessibleEntry),
-             ProfileRepositoryError::UnreadableDirectory);
+    QCOMPARE(inaccessibleEntry.profiles.size(), 1);
+    QCOMPARE(QFileInfo(inaccessibleEntry.profiles.constFirst().sourcePath).fileName(),
+             QStringLiteral("list-only.remmina"));
+    QCOMPARE(inaccessibleEntry.fingerprint.size(), 1);
 }
 
 void ProfileRepositoryTest::doesNotMutateDirectoryOrProfile()
@@ -517,7 +617,30 @@ void ProfileRepositoryTest::cachedErrorRetriesOnlyAfterFingerprintChange()
     QVERIFY(QFileInfo(profile).size() >= 60);
 }
 
-void ProfileRepositoryTest::cacheIsIsolatedByInstanceIdAndLocatedDirectory()
+void ProfileRepositoryTest::transientUnreadableParseErrorRetriesWithoutFingerprintChange()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const RemminaInstance instance = nativeInstance(temporary.path());
+    const QString directory = makeDirectory(profileDirectory(instance));
+    writeProfile(directory, u"transient.remmina");
+    int parseCount = 0;
+    ProfileRepository repository(
+        [&parseCount](const QString &source, const QString &launch, QString opaqueId) {
+            ++parseCount;
+            if (parseCount == 1) {
+                return ProfileParseResult(ProfileParseError::Unreadable);
+            }
+            return ProfileParseResult(successfulRecord(source, launch, opaqueId));
+        });
+
+    QVERIFY(snapshotFrom(repository.load(instance)).profiles.isEmpty());
+    QCOMPARE(snapshotFrom(repository.load(instance)).profiles.size(), 1);
+    QCOMPARE(snapshotFrom(repository.load(instance)).profiles.size(), 1);
+    QCOMPARE(parseCount, 2);
+}
+
+void ProfileRepositoryTest::scopeChangesEvictPriorCache()
 {
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
@@ -537,13 +660,17 @@ void ProfileRepositoryTest::cacheIsIsolatedByInstanceIdAndLocatedDirectory()
     otherId.id = QStringLiteral("other-id");
     snapshotFrom(repository.load(otherId));
     QCOMPARE(parseCount, 2);
+    snapshotFrom(repository.load(first));
+    QCOMPARE(parseCount, 3);
 
     RemminaInstance otherDirectory = nativeInstance(
         temporary.path() + QStringLiteral("/second"), QStringLiteral("shared-id"));
     makeDirectory(otherDirectory.profiles.dataHome);
     QVERIFY(QFile::link(firstDirectory, profileDirectory(otherDirectory)));
     snapshotFrom(repository.load(otherDirectory));
-    QCOMPARE(parseCount, 3);
+    QCOMPARE(parseCount, 4);
+    snapshotFrom(repository.load(first));
+    QCOMPARE(parseCount, 5);
 }
 
 QTEST_APPLESS_MAIN(ProfileRepositoryTest)
