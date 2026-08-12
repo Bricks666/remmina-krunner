@@ -16,6 +16,16 @@ target_link_libraries(test_matcher PRIVATE remmina_krunner_core Qt6::Test)
 
 add_test(NAME matcher COMMAND test_matcher)
 
+add_executable(test_key_file_reader test_key_file_reader.cpp)
+target_link_libraries(test_key_file_reader PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME key_file_reader COMMAND test_key_file_reader)
+
+add_executable(test_profile_parser test_profile_parser.cpp)
+target_link_libraries(test_profile_parser PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME profile_parser COMMAND test_profile_parser)
+
 add_executable(test_selection_policy test_selection_policy.cpp)
 target_link_libraries(test_selection_policy PRIVATE remmina_krunner_core Qt6::Test)
 

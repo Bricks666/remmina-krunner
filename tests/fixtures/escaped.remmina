@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
+# SPDX-License-Identifier: 0BSD
+
+[remmina]
+name=\sEscaped\sOffice\s
+server=rdp.example.test:3389?mode=fast\ssession=primary
+labels= Finance\sEast, Ops\tTeam, , Lab\sZone\s
+protocol=RDP\\TLS
+password=escaped-password-secret\qmust-not-be-decoded
+gateway=escaped-gateway-secret
+username=escaped-username-secret
+notes=escaped-notes-secret

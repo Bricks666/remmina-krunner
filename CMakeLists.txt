@@ -17,8 +17,10 @@ find_package(KF6Config REQUIRED)
 add_library(remmina_krunner_core STATIC
     src/core/instance_registry.cpp
     src/core/instance_scanner.cpp
+    src/core/key_file_reader.cpp
     src/core/kconfig_selection_store.cpp
     src/core/matcher.cpp
+    src/core/profile_parser.cpp
     src/core/selection_policy.cpp
     src/platform/qt_process_probe.cpp
 )

@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
+# SPDX-License-Identifier: 0BSD
+
+; A non-target group must not contribute values.
+[preferences]
+name=Preference Name
+
+[remmina]
+name=Zürich Office
+server=rdp.example.test:3389?token=visible=part
+labels=Finance East, Operations, Zürich
+protocol=RDP
+password=synthetic-password-secret
+gateway=synthetic-gateway-secret
+username=synthetic-username-secret
+notes=synthetic-notes-secret

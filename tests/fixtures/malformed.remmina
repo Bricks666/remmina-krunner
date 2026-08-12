@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
+# SPDX-License-Identifier: 0BSD
+
+[remmina]
+name=Malformed\qName
+password=malformed-password-secret
+gateway=malformed-gateway-secret
+username=malformed-username-secret
+notes=malformed-notes-secret
