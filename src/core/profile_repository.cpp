@@ -378,8 +378,7 @@ ProfileRepository::ProfileRepository(ProfileParserFunction parser)
     }
 }
 
-std::variant<ProfileSnapshot, ProfileRepositoryError> ProfileRepository::load(
-    const RemminaInstance &instance)
+RepositoryLoadResult ProfileRepository::load(const RemminaInstance &instance)
 {
     ProfileLocationResult locationResult =
         profile_locator_detail::locateProfileDirectoryDetailed(instance);

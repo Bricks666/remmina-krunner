@@ -30,9 +30,16 @@ enum class ProfileRepositoryError {
     UnreadableDirectory,
 };
 
+using RepositoryLoadResult = std::variant<ProfileSnapshot, ProfileRepositoryError>;
 using ProfileParseResult = std::variant<ProfileRecord, ProfileParseError>;
 using ProfileParserFunction =
     std::function<ProfileParseResult(const QString &, const QString &, QString)>;
+
+class ProfileRepositorySource {
+public:
+    virtual ~ProfileRepositorySource() = default;
+    [[nodiscard]] virtual RepositoryLoadResult load(const RemminaInstance &instance) = 0;
+};
 
 namespace profile_repository_detail {
 
@@ -40,13 +47,12 @@ namespace profile_repository_detail {
 
 } // namespace profile_repository_detail
 
-class ProfileRepository {
+class ProfileRepository final : public ProfileRepositorySource {
 public:
     // A repository retains mutable parse-cache state and must remain confined to one thread.
     explicit ProfileRepository(ProfileParserFunction parser = parseRemminaProfile);
 
-    [[nodiscard]] std::variant<ProfileSnapshot, ProfileRepositoryError> load(
-        const RemminaInstance &instance);
+    [[nodiscard]] RepositoryLoadResult load(const RemminaInstance &instance) override;
 
 private:
     struct CacheEntry {

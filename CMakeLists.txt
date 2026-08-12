@@ -20,11 +20,13 @@ add_library(remmina_krunner_core STATIC
     src/core/key_file_reader.cpp
     src/core/kconfig_selection_store.cpp
     src/core/matcher.cpp
+    src/core/profile_catalog.cpp
     src/core/profile_locator.cpp
     src/core/profile_parser.cpp
     src/core/profile_repository.cpp
     src/core/selection_policy.cpp
     src/platform/qt_process_probe.cpp
+    src/platform/qt_profile_watcher.cpp
 )
 set_target_properties(remmina_krunner_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(remmina_krunner_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

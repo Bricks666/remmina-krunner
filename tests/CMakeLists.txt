@@ -36,6 +36,16 @@ target_link_libraries(test_profile_repository PRIVATE remmina_krunner_core Qt6::
 
 add_test(NAME profile_repository COMMAND test_profile_repository)
 
+add_executable(test_profile_catalog test_profile_catalog.cpp)
+target_link_libraries(test_profile_catalog PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME profile_catalog COMMAND test_profile_catalog)
+
+add_executable(test_qt_profile_watcher test_qt_profile_watcher.cpp)
+target_link_libraries(test_qt_profile_watcher PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME qt_profile_watcher COMMAND test_qt_profile_watcher)
+
 add_executable(test_selection_policy test_selection_policy.cpp)
 target_link_libraries(test_selection_policy PRIVATE remmina_krunner_core Qt6::Test)
 
