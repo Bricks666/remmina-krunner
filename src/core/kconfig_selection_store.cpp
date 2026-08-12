@@ -40,5 +40,8 @@ bool KConfigSelectionStore::writeSelectedId(QStringView id)
     } else {
         general.writeEntry(selectedInstanceKey, id.toString());
     }
-    return config.sync();
+    const bool syncSucceeded = config.sync();
+    // A failed explicit sync must not be retried by KConfig's destructor.
+    config.markAsClean();
+    return syncSucceeded;
 }

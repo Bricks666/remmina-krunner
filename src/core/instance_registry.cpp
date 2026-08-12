@@ -7,6 +7,21 @@
 
 #include <utility>
 
+namespace {
+
+QString backendForStableId(QStringView id)
+{
+    if (id.startsWith(QLatin1StringView("flatpak:"))) {
+        return QStringLiteral("flatpak");
+    }
+    if (id.startsWith(QLatin1StringView("snap:"))) {
+        return QStringLiteral("snap");
+    }
+    return {};
+}
+
+} // namespace
+
 InstanceRegistry::InstanceRegistry(InstanceScanSource &scanSource,
                                    SelectionStore &selectionStore)
     : scanSource_(scanSource)
@@ -17,10 +32,18 @@ InstanceRegistry::InstanceRegistry(InstanceScanSource &scanSource,
 RegistrySnapshot InstanceRegistry::rescanAndRepair()
 {
     InstanceScanResult scanResult = scanSource_.scan();
+    const QString savedId = selectionStore_.selectedId();
     SelectionDecision selection =
-        validateSelection(scanResult.instances, selectionStore_.selectedId());
-    if (selection.changed) {
-        selectionStore_.writeSelectedId(selection.selectedId);
+        validateSelection(scanResult.instances, savedId);
+    if (!selection.changed) {
+        selectionSynchronized_ = true;
+    } else {
+        const QString failedSavedBackend = backendForStableId(savedId);
+        const bool savedSelectionMayBeTemporarilyUnavailable =
+            !failedSavedBackend.isEmpty()
+            && scanResult.failedBackends.contains(failedSavedBackend);
+        selectionSynchronized_ = !savedSelectionMayBeTemporarilyUnavailable
+            && selectionStore_.writeSelectedId(selection.selectedId);
     }
 
     snapshot_ = {
@@ -52,7 +75,7 @@ bool InstanceRegistry::select(QStringView id)
     if (!present) {
         return false;
     }
-    if (QStringView{snapshot_.selectedId} == id) {
+    if (QStringView{snapshot_.selectedId} == id && selectionSynchronized_) {
         return true;
     }
     if (!selectionStore_.writeSelectedId(id)) {
@@ -60,5 +83,6 @@ bool InstanceRegistry::select(QStringView id)
     }
 
     snapshot_.selectedId = id.toString();
+    selectionSynchronized_ = true;
     return true;
 }

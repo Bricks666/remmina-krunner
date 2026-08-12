@@ -100,6 +100,12 @@ private slots:
     void failedManualWriteKeepsOldSnapshot();
     void partialErrorsRetainSuccessfulInstancesAndSelection();
     void failedAutomaticRepairRemainsUsableAndRetriesOnRescan();
+    void flatpakFailureKeepsSavedSelectionForRecovery();
+    void snapFailureDoesNotClearSavedSelectionOnEmptyScan();
+    void unrelatedBackendFailureDoesNotBlockRepair();
+    void backendNameInsideUnknownPrefixDoesNotBlockRepair();
+    void sameFallbackManualSelectionRetriesFailedAutomaticWrite();
+    void manualSelectionPersistsEphemeralBackendFailureFallback();
     void preservesScannerOrderAcrossSuccessiveRescans();
 };
 
@@ -318,6 +324,160 @@ void InstanceRegistryTest::failedAutomaticRepairRemainsUsableAndRetriesOnRescan(
     QCOMPARE(store.writes, QStringList({flatpak.id, flatpak.id}));
     QCOMPARE(source.scanCount, 2);
     QCOMPARE(store.readCount, 2);
+}
+
+void InstanceRegistryTest::flatpakFailureKeepsSavedSelectionForRecovery()
+{
+    const RemminaInstance native =
+        makeInstance(QStringLiteral("native:/usr/bin/remmina"), InstanceKind::Native);
+    const RemminaInstance flatpak = makeInstance(
+        QStringLiteral("flatpak:user:org.remmina.Remmina/x86_64/stable"),
+        InstanceKind::Flatpak);
+    FakeScanSource source({
+        {.instances = {native}, .failedBackends = {QStringLiteral("flatpak")}},
+        {.instances = {native, flatpak}, .failedBackends = {}},
+    });
+    FakeSelectionStore store(flatpak.id);
+    InstanceRegistry registry(source, store);
+
+    const RegistrySnapshot degraded = registry.rescanAndRepair();
+
+    QCOMPARE(instanceIds(degraded.instances), QStringList{native.id});
+    QCOMPARE(degraded.selectedId, native.id);
+    QCOMPARE(degraded.failedBackends, QStringList{QStringLiteral("flatpak")});
+    QCOMPARE(store.persistedId, flatpak.id);
+    QVERIFY(store.writes.isEmpty());
+
+    const RegistrySnapshot recovered = registry.rescanAndRepair();
+
+    QCOMPARE(instanceIds(recovered.instances), QStringList({native.id, flatpak.id}));
+    QCOMPARE(recovered.selectedId, flatpak.id);
+    QVERIFY(recovered.failedBackends.isEmpty());
+    QCOMPARE(store.persistedId, flatpak.id);
+    QVERIFY(store.writes.isEmpty());
+    QCOMPARE(source.scanCount, 2);
+    QCOMPARE(store.readCount, 2);
+}
+
+void InstanceRegistryTest::snapFailureDoesNotClearSavedSelectionOnEmptyScan()
+{
+    const RemminaInstance snap = makeInstance(QStringLiteral("snap:remmina"), InstanceKind::Snap);
+    FakeScanSource source({
+        {.instances = {}, .failedBackends = {QStringLiteral("snap")}},
+        {.instances = {snap}, .failedBackends = {}},
+    });
+    FakeSelectionStore store(snap.id);
+    InstanceRegistry registry(source, store);
+
+    const RegistrySnapshot degraded = registry.rescanAndRepair();
+
+    QVERIFY(degraded.instances.isEmpty());
+    QVERIFY(degraded.selectedId.isEmpty());
+    QCOMPARE(degraded.failedBackends, QStringList{QStringLiteral("snap")});
+    QCOMPARE(store.persistedId, snap.id);
+    QVERIFY(store.writes.isEmpty());
+
+    const RegistrySnapshot recovered = registry.rescanAndRepair();
+
+    QCOMPARE(instanceIds(recovered.instances), QStringList{snap.id});
+    QCOMPARE(recovered.selectedId, snap.id);
+    QVERIFY(recovered.failedBackends.isEmpty());
+    QCOMPARE(store.persistedId, snap.id);
+    QVERIFY(store.writes.isEmpty());
+    QCOMPARE(source.scanCount, 2);
+    QCOMPARE(store.readCount, 2);
+}
+
+void InstanceRegistryTest::unrelatedBackendFailureDoesNotBlockRepair()
+{
+    const RemminaInstance native =
+        makeInstance(QStringLiteral("native:/usr/bin/remmina"), InstanceKind::Native);
+    const QString removedFlatpak =
+        QStringLiteral("flatpak:user:org.remmina.Remmina/x86_64/removed");
+    FakeScanSource source({{.instances = {native},
+                            .failedBackends = {QStringLiteral("snap")}}});
+    FakeSelectionStore store(removedFlatpak);
+    InstanceRegistry registry(source, store);
+
+    const RegistrySnapshot repaired = registry.rescanAndRepair();
+
+    QCOMPARE(repaired.selectedId, native.id);
+    QCOMPARE(repaired.failedBackends, QStringList{QStringLiteral("snap")});
+    QCOMPARE(store.persistedId, native.id);
+    QCOMPARE(store.writes, QStringList{native.id});
+}
+
+void InstanceRegistryTest::backendNameInsideUnknownPrefixDoesNotBlockRepair()
+{
+    const RemminaInstance native =
+        makeInstance(QStringLiteral("native:/usr/bin/remmina"), InstanceKind::Native);
+    FakeScanSource source({{.instances = {native},
+                            .failedBackends = {QStringLiteral("flatpak")}}});
+    FakeSelectionStore store(QStringLiteral("custom:flatpak:removed"));
+    InstanceRegistry registry(source, store);
+
+    const RegistrySnapshot repaired = registry.rescanAndRepair();
+
+    QCOMPARE(repaired.selectedId, native.id);
+    QCOMPARE(store.persistedId, native.id);
+    QCOMPARE(store.writes, QStringList{native.id});
+}
+
+void InstanceRegistryTest::sameFallbackManualSelectionRetriesFailedAutomaticWrite()
+{
+    const RemminaInstance flatpak = makeInstance(
+        QStringLiteral("flatpak:user:org.remmina.Remmina/x86_64/stable"),
+        InstanceKind::Flatpak);
+    const QString staleId = QStringLiteral("native:/removed/remmina");
+    FakeScanSource source({{.instances = {flatpak}, .failedBackends = {}}});
+    FakeSelectionStore store(staleId);
+    store.writeSucceeds = false;
+    InstanceRegistry registry(source, store);
+    const RegistrySnapshot fallback = registry.rescanAndRepair();
+    QCOMPARE(fallback.selectedId, flatpak.id);
+    QCOMPARE(store.writes, QStringList{flatpak.id});
+
+    QVERIFY(!registry.select(flatpak.id));
+
+    QCOMPARE(registry.snapshot().selectedId, flatpak.id);
+    QCOMPARE(store.persistedId, staleId);
+    QCOMPARE(store.writes, QStringList({flatpak.id, flatpak.id}));
+
+    store.writeSucceeds = true;
+    QVERIFY(registry.select(flatpak.id));
+
+    QCOMPARE(registry.snapshot().selectedId, flatpak.id);
+    QCOMPARE(store.persistedId, flatpak.id);
+    QCOMPARE(store.writes, QStringList({flatpak.id, flatpak.id, flatpak.id}));
+    QVERIFY(registry.select(flatpak.id));
+    QCOMPARE(store.writes, QStringList({flatpak.id, flatpak.id, flatpak.id}));
+    QCOMPARE(source.scanCount, 1);
+    QCOMPARE(store.readCount, 1);
+}
+
+void InstanceRegistryTest::manualSelectionPersistsEphemeralBackendFailureFallback()
+{
+    const RemminaInstance native =
+        makeInstance(QStringLiteral("native:/usr/bin/remmina"), InstanceKind::Native);
+    const QString savedFlatpak =
+        QStringLiteral("flatpak:user:org.remmina.Remmina/x86_64/stable");
+    FakeScanSource source({{.instances = {native},
+                            .failedBackends = {QStringLiteral("flatpak")}}});
+    FakeSelectionStore store(savedFlatpak);
+    InstanceRegistry registry(source, store);
+
+    const RegistrySnapshot degraded = registry.rescanAndRepair();
+    QCOMPARE(degraded.selectedId, native.id);
+    QCOMPARE(store.persistedId, savedFlatpak);
+    QVERIFY(store.writes.isEmpty());
+
+    QVERIFY(registry.select(native.id));
+
+    QCOMPARE(registry.snapshot().selectedId, native.id);
+    QCOMPARE(store.persistedId, native.id);
+    QCOMPARE(store.writes, QStringList{native.id});
+    QVERIFY(registry.select(native.id));
+    QCOMPARE(store.writes, QStringList{native.id});
 }
 
 void InstanceRegistryTest::preservesScannerOrderAcrossSuccessiveRescans()

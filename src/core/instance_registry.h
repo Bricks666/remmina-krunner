@@ -30,4 +30,6 @@ private:
     InstanceScanSource &scanSource_;
     SelectionStore &selectionStore_;
     RegistrySnapshot snapshot_;
+    // Whether snapshot_.selectedId is known to match the persisted store.
+    bool selectionSynchronized_ = false;
 };
