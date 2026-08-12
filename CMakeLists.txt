@@ -8,11 +8,23 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+option(BUILD_SHARED_LIBS "Build loadable plugins as shared modules" ON)
+
+find_package(ECM REQUIRED NO_MODULE)
+list(APPEND CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
+
+set(QT_MAJOR_VERSION 6)
+include(KDEInstallDirs6)
 
 include(CTest)
 
-find_package(Qt6 6.7 REQUIRED COMPONENTS Core DBus)
+find_package(Qt6 6.7 REQUIRED COMPONENTS Core DBus Widgets)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 find_package(KF6Config REQUIRED)
+find_package(KF6CoreAddons REQUIRED)
+find_package(KF6I18n REQUIRED)
+find_package(KF6KCMUtils REQUIRED)
 
 add_library(remmina_krunner_core STATIC
     src/core/instance_registry.cpp
@@ -38,6 +50,28 @@ target_link_libraries(remmina_krunner_core
     PUBLIC Qt6::Core Qt6::DBus
     PRIVATE KF6::ConfigCore
 )
+
+add_library(remmina_krunner_kcm STATIC
+    src/kcm/instance_settings_model.cpp
+    src/kcm/remmina_runner_config.cpp
+    src/kcm/remmina_runner_config.ui
+)
+set_target_properties(remmina_krunner_kcm PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(remmina_krunner_kcm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(remmina_krunner_kcm
+    PRIVATE TRANSLATION_DOMAIN="remmina-krunner"
+)
+target_link_libraries(remmina_krunner_kcm
+    PUBLIC remmina_krunner_core KF6::KCMUtils Qt6::Widgets
+    PRIVATE KF6::ConfigCore KF6::CoreAddons KF6::I18n
+)
+
+kcoreaddons_add_plugin(kcm_remmina_krunner
+    SOURCES src/kcm/remmina_runner_config_plugin.cpp
+    INSTALL_NAMESPACE "kf6/krunner/kcms"
+)
+set_target_properties(kcm_remmina_krunner PROPERTIES PREFIX "")
+target_link_libraries(kcm_remmina_krunner PRIVATE remmina_krunner_kcm)
 
 if(BUILD_TESTING)
     find_package(Qt6 6.7 REQUIRED COMPONENTS Test)

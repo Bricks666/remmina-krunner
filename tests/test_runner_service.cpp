@@ -87,6 +87,8 @@ public:
         return value;
     }
 
+    bool select(QStringView) override { return false; }
+
     RegistrySnapshot value{{instance()}, QStringLiteral("native:/usr/bin/remmina"), {}};
     mutable int snapshotCalls = 0;
     int rescanCalls = 0;

@@ -36,6 +36,7 @@ public:
         ++rescanCalls;
         return {};
     }
+    bool select(QStringView) override { return false; }
     int rescanCalls = 0;
 };
 

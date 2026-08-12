@@ -68,6 +68,23 @@ target_link_libraries(test_instance_registry PRIVATE remmina_krunner_core Qt6::T
 
 add_test(NAME instance_registry COMMAND test_instance_registry)
 
+add_executable(test_instance_settings_model test_instance_settings_model.cpp)
+target_link_libraries(test_instance_settings_model PRIVATE remmina_krunner_kcm Qt6::Test)
+
+add_test(NAME instance_settings_model COMMAND test_instance_settings_model)
+
+add_executable(test_kcm test_kcm.cpp)
+target_compile_definitions(test_kcm PRIVATE
+    KCM_PLUGIN_PATH="$<TARGET_FILE:kcm_remmina_krunner>"
+)
+target_link_libraries(test_kcm
+    PRIVATE remmina_krunner_kcm KF6::CoreAddons KF6::KCMUtils Qt6::Test Qt6::Widgets
+)
+add_dependencies(test_kcm kcm_remmina_krunner)
+
+add_test(NAME kcm COMMAND test_kcm)
+set_tests_properties(kcm PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(process_probe_helper process_probe_helper.cpp)
 
 add_executable(test_qt_process_probe test_qt_process_probe.cpp)

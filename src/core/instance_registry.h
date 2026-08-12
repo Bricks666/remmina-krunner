@@ -29,6 +29,7 @@ public:
     // Implementations are non-owning service dependencies and are called on
     // their owning thread.
     [[nodiscard]] virtual RegistrySnapshot rescanAndRepair() = 0;
+    [[nodiscard]] virtual bool select(QStringView id) = 0;
 };
 
 class InstanceRegistry final : public InstanceRegistryControlSource {
@@ -39,7 +40,7 @@ public:
 
     RegistrySnapshot rescanAndRepair() override;
     [[nodiscard]] RegistrySnapshot snapshot() const override;
-    bool select(QStringView id);
+    bool select(QStringView id) override;
 
 private:
     InstanceScanSource &scanSource_;
