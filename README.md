@@ -153,6 +153,8 @@ After installing a verified bundle in a manual Plasma session:
    session to check watcher/fingerprint refresh.
 4. Temporarily remove or deselect the test instance to check fallback and the
    no-installation messages, then restore it.
+5. Run the matching verified bundle's `uninstall.sh`; confirm runner-owned files
+   are removed while the test profile and `~/.config/remmina-krunnerrc` remain.
 
 Do not print, copy, attach, or log profile files or real result text while
 validating. Remove the synthetic profile when finished.

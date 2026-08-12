@@ -59,6 +59,21 @@ endforeach()
 assert_contains("${README_TEXT}" "README.md" "`rem` returns no results")
 assert_contains("${README_TEXT}" "README.md" "case-insensitive")
 
+string(FIND "${README_TEXT}" "## Safe manual Plasma validation" MANUAL_START)
+string(FIND "${README_TEXT}" "## Development" MANUAL_END)
+if(MANUAL_START EQUAL -1 OR MANUAL_END EQUAL -1 OR MANUAL_END LESS MANUAL_START)
+    message(FATAL_ERROR "README.md must contain the manual Plasma validation section")
+endif()
+math(EXPR MANUAL_LENGTH "${MANUAL_END} - ${MANUAL_START}")
+string(SUBSTRING "${README_TEXT}" ${MANUAL_START} ${MANUAL_LENGTH} MANUAL_TEXT)
+foreach(NEEDLE IN ITEMS
+    "matching verified bundle's `uninstall.sh`"
+    "runner-owned files"
+    "test profile and `~/.config/remmina-krunnerrc` remain"
+)
+    assert_contains("${MANUAL_TEXT}" "README.md manual Plasma validation" "${NEEDLE}")
+endforeach()
+
 foreach(NEEDLE IN ITEMS
     "Podman"
     "./scripts/container.sh configure"
