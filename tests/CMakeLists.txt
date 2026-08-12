@@ -86,6 +86,14 @@ target_link_libraries(test_remmina_launcher
 
 add_test(NAME remmina_launcher COMMAND test_remmina_launcher)
 
+find_package(KF6Runner REQUIRED)
+add_executable(test_dbus_types_kf6 test_dbus_types_kf6.cpp)
+target_link_libraries(test_dbus_types_kf6
+    PRIVATE remmina_krunner_core KF6::Runner
+)
+
+add_test(NAME dbus_types_kf6 COMMAND test_dbus_types_kf6)
+
 add_executable(test_dbus_contract test_dbus_contract.cpp)
 target_compile_definitions(test_dbus_contract
     PRIVATE KRUNNER_INTERFACE_XML="${PROJECT_SOURCE_DIR}/data/org.kde.krunner1.xml"
@@ -107,6 +115,7 @@ target_link_libraries(test_runner_service
 add_test(NAME runner_service
     COMMAND ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:test_runner_service>
 )
+set_tests_properties(dbus_contract runner_service PROPERTIES TIMEOUT 15)
 
 add_executable(process_launcher_helper process_launcher_helper.cpp)
 target_link_libraries(process_launcher_helper PRIVATE Qt6::Core)

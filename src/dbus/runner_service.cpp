@@ -9,6 +9,7 @@
 #include "core/remmina_launcher.h"
 
 #include <QStringList>
+#include <QTimer>
 
 #include <limits>
 #include <optional>
@@ -155,6 +156,7 @@ RunnerService::RunnerService(InstanceRegistryControlSource &registry,
     , registry_(registry)
     , catalog_(catalog)
     , launcher_(launcher)
+    , catalogIdleTimer_(new QTimer(this))
     , creationResult_(creationResult())
     , noInstanceError_(noInstanceError())
     , noProfilesError_(noProfilesError())
@@ -163,10 +165,11 @@ RunnerService::RunnerService(InstanceRegistryControlSource &registry,
     , config_(runnerConfig())
 {
     static_assert(std::is_nothrow_copy_constructible_v<RemoteMatches>);
+    static_assert(std::is_nothrow_copy_constructible_v<QVariantMap>);
     registerDbusTypes();
-    catalogIdleTimer_.setSingleShot(true);
-    catalogIdleTimer_.setInterval(timerInterval(catalogIdleTimeout));
-    connect(&catalogIdleTimer_, &QTimer::timeout, this, [this] {
+    catalogIdleTimer_->setSingleShot(true);
+    catalogIdleTimer_->setInterval(timerInterval(catalogIdleTimeout));
+    connect(catalogIdleTimer_, &QTimer::timeout, this, [this] {
         endActiveSession(true);
     });
 }
@@ -178,6 +181,7 @@ RunnerService::~RunnerService() noexcept
 
 RemoteMatches RunnerService::Match(const QString &query) noexcept
 {
+    activationToken_.clear();
     try {
         const ParsedQuery parsed = parseRunnerQuery(query);
         if (parsed.kind == QueryKind::Ignore) {
@@ -226,7 +230,7 @@ RemoteMatches RunnerService::Match(const QString &query) noexcept
             offeredProfileIds.insert(match.record.opaqueId);
         }
         offeredProfileIds_.swap(offeredProfileIds);
-        catalogIdleTimer_.start();
+        catalogIdleTimer_->start();
         return remoteMatches;
     } catch (...) {
         endActiveSession(false);
@@ -288,7 +292,7 @@ void RunnerService::SetActivationToken(const QString &token) noexcept
 
 void RunnerService::endActiveSession(bool clearActivationToken) noexcept
 {
-    catalogIdleTimer_.stop();
+    catalogIdleTimer_->stop();
     offeredProfileIds_.clear();
     if (clearActivationToken) {
         activationToken_.clear();
@@ -305,7 +309,7 @@ void RunnerService::endActiveSession(bool clearActivationToken) noexcept
 
 void RunnerService::teardownEveryCall() noexcept
 {
-    catalogIdleTimer_.stop();
+    catalogIdleTimer_->stop();
     activationToken_.clear();
     offeredProfileIds_.clear();
     sessionActive_ = false;

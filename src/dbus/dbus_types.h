@@ -71,12 +71,6 @@ inline const QDBusArgument &operator>>(const QDBusArgument &argument, RunnerActi
 
 } // namespace RemminaKRunner
 
-using RemoteMatches = RemminaKRunner::RemoteMatches;
-
-namespace KRunner {
-using Actions = RemminaKRunner::RunnerActions;
-}
-
 Q_DECLARE_METATYPE(RemminaKRunner::RemoteMatch)
 Q_DECLARE_METATYPE(RemminaKRunner::RemoteMatches)
 Q_DECLARE_METATYPE(RemminaKRunner::RunnerAction)

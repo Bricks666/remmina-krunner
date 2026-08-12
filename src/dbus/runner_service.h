@@ -8,13 +8,13 @@
 #include <QObject>
 #include <QSet>
 #include <QString>
-#include <QTimer>
 #include <QVariantMap>
 
 #include <chrono>
 
 class InstanceRegistryControlSource;
 class ProfileCatalogAccess;
+class QTimer;
 class RemminaLaunchSource;
 
 namespace RemminaKRunner {
@@ -55,7 +55,7 @@ private:
     InstanceRegistryControlSource &registry_;
     ProfileCatalogAccess &catalog_;
     RemminaLaunchSource &launcher_;
-    QTimer catalogIdleTimer_;
+    QTimer *catalogIdleTimer_;
     QString activationToken_;
     QSet<QString> offeredProfileIds_;
     bool sessionActive_ = false;

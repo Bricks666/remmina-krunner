@@ -35,8 +35,8 @@ add_library(remmina_krunner_core STATIC
 set_target_properties(remmina_krunner_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(remmina_krunner_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(remmina_krunner_core
-    PUBLIC Qt6::Core
-    PRIVATE KF6::ConfigCore Qt6::DBus
+    PUBLIC Qt6::Core Qt6::DBus
+    PRIVATE KF6::ConfigCore
 )
 
 if(BUILD_TESTING)

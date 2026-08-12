@@ -350,13 +350,28 @@ void DbusContractTest::liveServiceExportsAndAnswersEveryContractMethod()
                           QStringLiteral("org.kde.krunner1"),
                           bus);
     QVERIFY(runner.isValid());
+    const QString abandonedToken =
+        QStringLiteral("abandoned-live-activation-token-sentinel");
+    QCOMPARE(await(runner.asyncCall(QStringLiteral("SetActivationToken"),
+                                    abandonedToken)).type(),
+             QDBusMessage::ReplyMessage);
     const QDBusMessage matchReply =
         await(runner.asyncCall(QStringLiteral("Match"), QStringLiteral("rem new")));
     QCOMPARE(matchReply.type(), QDBusMessage::ReplyMessage);
     const QDBusArgument matchArgument =
         qvariant_cast<QDBusArgument>(matchReply.arguments().constFirst());
     QCOMPARE(matchArgument.currentSignature(), QStringLiteral("a(sssida{sv})"));
-    QCOMPARE(qdbus_cast<RemminaKRunner::RemoteMatches>(matchArgument).size(), 1);
+    const RemminaKRunner::RemoteMatches liveMatches =
+        qdbus_cast<RemminaKRunner::RemoteMatches>(matchArgument);
+    QCOMPARE(liveMatches.size(), 1);
+    QVERIFY(!liveMatches.constFirst().id.contains(abandonedToken));
+    QVERIFY(!liveMatches.constFirst().text.contains(abandonedToken));
+    QVERIFY(!liveMatches.constFirst().properties.values().contains(abandonedToken));
+    QCOMPARE(await(runner.asyncCall(QStringLiteral("Run"),
+                                    QStringLiteral("action:new"), QString{})).type(),
+             QDBusMessage::ReplyMessage);
+    QCOMPARE(launcher.createCalls, 1);
+    QCOMPARE(launcher.token, QString{});
 
     const QDBusMessage actionsReply = await(runner.asyncCall(QStringLiteral("Actions")));
     QCOMPARE(actionsReply.type(), QDBusMessage::ReplyMessage);
@@ -379,7 +394,7 @@ void DbusContractTest::liveServiceExportsAndAnswersEveryContractMethod()
     QCOMPARE(await(runner.asyncCall(QStringLiteral("Run"),
                                     QStringLiteral("action:new"), QString{})).type(),
              QDBusMessage::ReplyMessage);
-    QCOMPARE(launcher.createCalls, 1);
+    QCOMPARE(launcher.createCalls, 2);
     QCOMPARE(launcher.token, QStringLiteral("one-shot"));
     QCOMPARE(await(runner.asyncCall(QStringLiteral("Teardown"))).type(),
              QDBusMessage::ReplyMessage);

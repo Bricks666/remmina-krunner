@@ -28,10 +28,6 @@
 #include <utility>
 
 using namespace std::chrono_literals;
-using RemminaKRunner::RemoteMatch;
-using RemminaKRunner::RemoteMatches;
-using RemminaKRunner::RunnerService;
-
 namespace {
 
 constexpr int possibleMatch = 50;
@@ -226,7 +222,7 @@ struct Harness {
     FakeRegistry registry;
     FakeCatalog catalog;
     FakeLauncher launcher;
-    RunnerService service;
+    RemminaKRunner::RunnerService service;
 };
 
 QDBusMessage await(QDBusPendingCall call)
@@ -267,8 +263,9 @@ void appendStrings(const QVariant &value, QStringList &strings)
         }
     } else if (value.metaType() == QMetaType::fromType<QDBusArgument>()) {
         const QDBusArgument argument = qvariant_cast<QDBusArgument>(value);
-        const RemoteMatches matches = qdbus_cast<RemoteMatches>(argument);
-        for (const RemoteMatch &match : matches) {
+        const RemminaKRunner::RemoteMatches matches =
+            qdbus_cast<RemminaKRunner::RemoteMatches>(argument);
+        for (const RemminaKRunner::RemoteMatch &match : matches) {
             appendStrings(QVariantList{match.id,
                                        match.text,
                                        match.iconName,
@@ -280,7 +277,8 @@ void appendStrings(const QVariant &value, QStringList &strings)
     }
 }
 
-void verifySafeProperties(const RemoteMatch &match, const QString &subtext)
+void verifySafeProperties(const RemminaKRunner::RemoteMatch &match,
+                          const QString &subtext)
 {
     QCOMPARE(match.properties.keys(),
              QStringList({QStringLiteral("actions"),
@@ -298,10 +296,10 @@ void verifySafeProperties(const RemoteMatch &match, const QString &subtext)
     QVERIFY(match.properties.value(QStringLiteral("actions")).toStringList().isEmpty());
 }
 
-void verifyGenericError(const RemoteMatches &matches, const QString &id)
+void verifyGenericError(const RemminaKRunner::RemoteMatches &matches, const QString &id)
 {
     QCOMPARE(matches.size(), 1);
-    const RemoteMatch &match = matches.constFirst();
+    const RemminaKRunner::RemoteMatch &match = matches.constFirst();
     QCOMPARE(match.id, id);
     QCOMPARE(match.text, QStringLiteral("Remmina unavailable"));
     QCOMPARE(match.iconName, QStringLiteral("org.remmina.Remmina"));
@@ -328,6 +326,8 @@ private slots:
     void runRoutesOnlySupportedIdsAndAlwaysConsumesToken();
     void onlyCurrentOfferedProfileIdsAreActionable();
     void activationTokenReplacementAndLifecycleClearing();
+    void matchExpiresAbandonedActivationToken();
+    void idleTimerIsAServiceChild();
     void selectionChangeBetweenMatchAndRunIsRejectedByLauncher();
     void teardownIdleAndDestructorHaveExactSessionSemantics();
     void configHasExactTriggerContractAndResetOrdering();
@@ -350,9 +350,10 @@ void RunnerServiceTest::ignoredAndCreationQueriesTouchNoSources()
     QCOMPARE(harness.catalog.recordsCalls, 0);
     QCOMPARE(harness.catalog.endCalls, 0);
 
-    const RemoteMatches matches = harness.service.Match(QStringLiteral("ReM NeW"));
+    const RemminaKRunner::RemoteMatches matches =
+        harness.service.Match(QStringLiteral("ReM NeW"));
     QCOMPARE(matches.size(), 1);
-    const RemoteMatch &match = matches.constFirst();
+    const RemminaKRunner::RemoteMatch &match = matches.constFirst();
     QCOMPARE(match.id, QStringLiteral("action:new"));
     QCOMPARE(match.text, QStringLiteral("Create a new Remmina connection"));
     QCOMPARE(match.iconName, QStringLiteral("org.remmina.Remmina"));
@@ -391,13 +392,17 @@ void RunnerServiceTest::profileMatchesExposeOnlyVisibleMetadataAndStableOrdering
         record(QStringLiteral("opaque-a"), QStringLiteral("Alpha office")),
     };
 
-    const RemoteMatches matches = harness.service.Match(QStringLiteral("rem office east"));
+    const QString directTokenSentinel =
+        QStringLiteral("direct-activation-token-privacy-sentinel");
+    harness.service.SetActivationToken(directTokenSentinel);
+    const RemminaKRunner::RemoteMatches matches =
+        harness.service.Match(QStringLiteral("rem office east"));
     QCOMPARE(harness.registry.snapshotCalls, 1);
     QCOMPARE(harness.catalog.recordsCalls, 1);
     QCOMPARE(matches.size(), 2);
     QCOMPARE(matches.at(0).id, QStringLiteral("opaque-a"));
     QCOMPARE(matches.at(1).id, QStringLiteral("opaque-z"));
-    for (const RemoteMatch &match : matches) {
+    for (const RemminaKRunner::RemoteMatch &match : matches) {
         QCOMPARE(match.iconName, QStringLiteral("org.remmina.Remmina"));
         QCOMPARE(match.categoryRelevance, possibleMatch);
         QCOMPARE(match.relevance, 0.75);
@@ -405,7 +410,7 @@ void RunnerServiceTest::profileMatchesExposeOnlyVisibleMetadataAndStableOrdering
     }
 
     QVariantList variants;
-    for (const RemoteMatch &match : matches) {
+    for (const RemminaKRunner::RemoteMatch &match : matches) {
         variants.append(QVariantList{match.id,
                                      match.text,
                                      match.iconName,
@@ -425,6 +430,9 @@ void RunnerServiceTest::profileMatchesExposeOnlyVisibleMetadataAndStableOrdering
                              QStringLiteral("org.kde.krunner1"),
                              bus);
     QVERIFY(interface.isValid());
+    const QString liveTokenSentinel =
+        QStringLiteral("live-activation-token-privacy-sentinel");
+    harness.service.SetActivationToken(liveTokenSentinel);
     const QDBusMessage reply = await(interface.asyncCall(QStringLiteral("Match"),
                                                          QStringLiteral("rem office east")));
     QCOMPARE(reply.type(), QDBusMessage::ReplyMessage);
@@ -444,7 +452,9 @@ void RunnerServiceTest::profileMatchesExposeOnlyVisibleMetadataAndStableOrdering
                                   QStringLiteral("username-gateway-note-unknown-secret"),
                                   QStringLiteral("instance-password-secret"),
                                   QStringLiteral("/secret/gateway/remmina"),
-                                  QStringLiteral("unknown-launcher-secret")}) {
+                                  QStringLiteral("unknown-launcher-secret"),
+                                  directTokenSentinel,
+                                  liveTokenSentinel}) {
         for (const QString &visible : strings) {
             QVERIFY2(!visible.contains(secret), qPrintable(visible));
         }
@@ -474,7 +484,8 @@ void RunnerServiceTest::subtitleOmitsBlankComponents()
                                                               item.server,
                                                               item.labels,
                                                               item.protocol)};
-        const RemoteMatches matches = harness.service.Match(QStringLiteral("rem office"));
+        const RemminaKRunner::RemoteMatches matches =
+            harness.service.Match(QStringLiteral("rem office"));
         QCOMPARE(matches.size(), 1);
         verifySafeProperties(matches.constFirst(), item.expected);
     }
@@ -648,6 +659,54 @@ void RunnerServiceTest::activationTokenReplacementAndLifecycleClearing()
     QCOMPARE(harness.launcher.tokens.constLast(), QString{});
 }
 
+void RunnerServiceTest::matchExpiresAbandonedActivationToken()
+{
+    struct Case {
+        QString query;
+        QString runId;
+        bool throwRegistry = false;
+    };
+    const QList<Case> cases{
+        {QStringLiteral("rem new"), QStringLiteral("action:new")},
+        {QStringLiteral("rem"), QStringLiteral("action:new")},
+        {QStringLiteral("rem office"), QStringLiteral("opaque-profile-a")},
+        {QStringLiteral("rem office"), QStringLiteral("action:new"), true},
+    };
+    for (const Case &item : cases) {
+        Harness harness;
+        harness.registry.throwSnapshot = item.throwRegistry;
+        const QString sentinel = QStringLiteral("abandoned-activation-token-sentinel");
+        harness.service.SetActivationToken(sentinel);
+        const RemminaKRunner::RemoteMatches matches = harness.service.Match(item.query);
+        QVariantList serialized;
+        for (const RemminaKRunner::RemoteMatch &match : matches) {
+            serialized.append(QVariantList{match.id,
+                                           match.text,
+                                           match.iconName,
+                                           match.categoryRelevance,
+                                           match.relevance,
+                                           match.properties});
+        }
+        QStringList strings;
+        appendStrings(serialized, strings);
+        QVERIFY(!strings.contains(sentinel));
+
+        harness.service.Run(item.runId, QString{});
+        QCOMPARE(harness.launcher.tokens.size(), 1);
+        QCOMPARE(harness.launcher.tokens.constFirst(), QString{});
+    }
+}
+
+void RunnerServiceTest::idleTimerIsAServiceChild()
+{
+    Harness harness;
+    const QList<QTimer *> timers =
+        harness.service.findChildren<QTimer *>(QString{}, Qt::FindDirectChildrenOnly);
+    QCOMPARE(timers.size(), 1);
+    QCOMPARE(timers.constFirst()->parent(), &harness.service);
+    QVERIFY(timers.constFirst()->isSingleShot());
+}
+
 void RunnerServiceTest::selectionChangeBetweenMatchAndRunIsRejectedByLauncher()
 {
     FakeRegistry registry;
@@ -657,7 +716,7 @@ void RunnerServiceTest::selectionChangeBetweenMatchAndRunIsRejectedByLauncher()
     RemminaLauncher launcher(registry, catalog, process, notifier, [] {
         return QProcessEnvironment{};
     });
-    RunnerService service(registry, catalog, launcher);
+    RemminaKRunner::RunnerService service(registry, catalog, launcher);
 
     registry.value.instances = {instance(QStringLiteral("B"))};
     registry.value.selectedId = QStringLiteral("B");
@@ -680,7 +739,7 @@ void RunnerServiceTest::teardownIdleAndDestructorHaveExactSessionSemantics()
     FakeCatalog catalog;
     FakeLauncher launcher;
     {
-        RunnerService service(registry, catalog, launcher, 0ms);
+        RemminaKRunner::RunnerService service(registry, catalog, launcher, 0ms);
         QCOMPARE(service.Match(QStringLiteral("rem office")).size(), 1);
         QTRY_COMPARE_WITH_TIMEOUT(catalog.endCalls, 1, 1000);
         service.Teardown();
@@ -691,7 +750,7 @@ void RunnerServiceTest::teardownIdleAndDestructorHaveExactSessionSemantics()
     QCOMPARE(catalog.endCalls, 3);
 
     {
-        RunnerService service(registry, catalog, launcher, 10s);
+        RemminaKRunner::RunnerService service(registry, catalog, launcher, 10s);
         QCOMPARE(service.Match(QStringLiteral("rem office")).size(), 1);
     }
     QCOMPARE(catalog.endCalls, 4);
