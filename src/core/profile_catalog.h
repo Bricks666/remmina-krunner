@@ -30,7 +30,17 @@ public:
         QStringView expectedInstanceId, QStringView opaqueId) const = 0;
 };
 
-class ProfileCatalog final : public ProfileCatalogReadSource {
+class ProfileCatalogAccess : public ProfileCatalogReadSource {
+public:
+    ~ProfileCatalogAccess() override = default;
+    // Implementations are non-owning service dependencies and are called on
+    // their owning thread.
+    [[nodiscard]] virtual CatalogResult records(const RemminaInstance &instance) = 0;
+    virtual void endSession() = 0;
+    virtual void reset() = 0;
+};
+
+class ProfileCatalog final : public ProfileCatalogAccess {
 public:
     // The catalog is same-thread confined. Dependencies are non-owning, are used on
     // that same thread, and must outlive the catalog.
@@ -44,12 +54,12 @@ public:
 
     // Dependency exceptions may propagate from records(); its refresh state remains
     // retry-safe. reset() and destruction contain watcher cleanup exceptions.
-    [[nodiscard]] CatalogResult records(const RemminaInstance &instance);
+    [[nodiscard]] CatalogResult records(const RemminaInstance &instance) override;
     [[nodiscard]] std::optional<ProfileRecord> resolve(
         QStringView expectedInstanceId, QStringView opaqueId) const override;
     void markDirty() noexcept;
-    void endSession();
-    void reset() noexcept;
+    void endSession() override;
+    void reset() noexcept override;
 
 private:
     struct CallbackLifetime;

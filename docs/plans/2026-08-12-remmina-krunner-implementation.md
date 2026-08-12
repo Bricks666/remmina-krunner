@@ -776,6 +776,13 @@ DBus2.
 
 **Step 4: Verify and commit**
 
+Integration caveat for Task 12: current KF6 `DBusRunner::requestConfig()` iterates
+the sorted `QVariantMap`, applies `MatchRegex`, and then applies `TriggerWords`;
+`setTriggerWords()` replaces the earlier regular expression with its generated
+prefix expression. Task 10 deliberately returns both keys required by its
+contract. Task 12 metadata/activation integration tests must verify the effective
+standalone, case-insensitive trigger behavior against the installed KF6 version.
+
 ```bash
 ./scripts/container.sh test 'runner_service|dbus_contract'
 ./scripts/container.sh check

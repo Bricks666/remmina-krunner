@@ -26,6 +26,7 @@ add_library(remmina_krunner_core STATIC
     src/core/profile_repository.cpp
     src/core/remmina_launcher.cpp
     src/core/selection_policy.cpp
+    src/dbus/runner_service.cpp
     src/platform/freedesktop_notifier.cpp
     src/platform/qt_process_launcher.cpp
     src/platform/qt_process_probe.cpp

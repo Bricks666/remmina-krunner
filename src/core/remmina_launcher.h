@@ -22,7 +22,16 @@ enum class RemminaLaunchResult {
     StartFailed,
 };
 
-class RemminaLauncher {
+class RemminaLaunchSource {
+public:
+    virtual ~RemminaLaunchSource() = default;
+    // Calls are same-thread and receive only opaque IDs and a one-shot token.
+    virtual RemminaLaunchResult create(QStringView activationToken = {}) = 0;
+    virtual RemminaLaunchResult connect(QStringView opaqueId,
+                                        QStringView activationToken = {}) = 0;
+};
+
+class RemminaLauncher final : public RemminaLaunchSource {
 public:
     using EnvironmentProvider = std::function<QProcessEnvironment()>;
 
@@ -38,9 +47,9 @@ public:
                     Notifier &notifier,
                     EnvironmentProvider environmentProvider);
 
-    RemminaLaunchResult create(QStringView activationToken = {}) noexcept;
+    RemminaLaunchResult create(QStringView activationToken = {}) noexcept override;
     RemminaLaunchResult connect(QStringView opaqueId,
-                                QStringView activationToken = {}) noexcept;
+                                QStringView activationToken = {}) noexcept override;
 
 private:
     [[nodiscard]] bool selectedInstance(RemminaInstance &instance) const;

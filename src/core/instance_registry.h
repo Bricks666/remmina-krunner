@@ -23,12 +23,21 @@ public:
     [[nodiscard]] virtual RegistrySnapshot snapshot() const = 0;
 };
 
-class InstanceRegistry final : public InstanceRegistrySource {
+class InstanceRegistryControlSource : public InstanceRegistrySource {
 public:
-    // Both dependencies are non-owning and must outlive the registry.
+    ~InstanceRegistryControlSource() override = default;
+    // Implementations are non-owning service dependencies and are called on
+    // their owning thread.
+    [[nodiscard]] virtual RegistrySnapshot rescanAndRepair() = 0;
+};
+
+class InstanceRegistry final : public InstanceRegistryControlSource {
+public:
+    // Both dependencies are non-owning, same-thread confined, and must outlive
+    // the registry.
     InstanceRegistry(InstanceScanSource &scanSource, SelectionStore &selectionStore);
 
-    RegistrySnapshot rescanAndRepair();
+    RegistrySnapshot rescanAndRepair() override;
     [[nodiscard]] RegistrySnapshot snapshot() const override;
     bool select(QStringView id);
 
