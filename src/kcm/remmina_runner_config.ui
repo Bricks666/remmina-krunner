@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: 2026 Remmina KRunner contributors -->
+<!-- SPDX-License-Identifier: 0BSD -->
+<ui version="4.0">
+ <class>RemminaRunnerConfig</class>
+ <widget class="QWidget" name="RemminaRunnerConfig">
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="explanationLabel">
+     <property name="text">
+      <string>Choose which discovered Remmina installation the runner should use.</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QComboBox" name="instanceCombo">
+     <property name="accessibleName">
+      <string>Remmina installation</string>
+     </property>
+     <property name="toolTip">
+      <string>Select the Remmina installation used to open connections.</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="statusLabel">
+     <property name="accessibleName">
+      <string>Installation scan status</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Orientation::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

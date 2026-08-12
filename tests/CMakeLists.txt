@@ -1,0 +1,331 @@
+# SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
+# SPDX-License-Identifier: 0BSD
+
+get_target_property(remmina_krunner_core_pic remmina_krunner_core POSITION_INDEPENDENT_CODE)
+if(NOT remmina_krunner_core_pic)
+    message(FATAL_ERROR "remmina_krunner_core must be position-independent")
+endif()
+
+add_executable(test_smoke test_smoke.cpp)
+target_link_libraries(test_smoke PRIVATE Qt6::Test)
+
+add_test(NAME smoke COMMAND test_smoke)
+
+add_executable(test_matcher test_matcher.cpp)
+target_link_libraries(test_matcher PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME matcher COMMAND test_matcher)
+
+add_executable(test_key_file_reader test_key_file_reader.cpp)
+target_link_libraries(test_key_file_reader PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME key_file_reader COMMAND test_key_file_reader)
+
+add_executable(test_profile_parser test_profile_parser.cpp)
+target_link_libraries(test_profile_parser PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME profile_parser COMMAND test_profile_parser)
+
+add_executable(test_profile_locator test_profile_locator.cpp)
+target_link_libraries(test_profile_locator PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME profile_locator COMMAND test_profile_locator)
+
+add_executable(test_profile_repository test_profile_repository.cpp)
+target_link_libraries(test_profile_repository PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME profile_repository COMMAND test_profile_repository)
+
+add_executable(test_profile_catalog test_profile_catalog.cpp)
+target_link_libraries(test_profile_catalog PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME profile_catalog COMMAND test_profile_catalog)
+
+add_executable(test_qt_profile_watcher test_qt_profile_watcher.cpp)
+target_link_libraries(test_qt_profile_watcher PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME qt_profile_watcher COMMAND test_qt_profile_watcher)
+
+add_executable(test_selection_policy test_selection_policy.cpp)
+target_link_libraries(test_selection_policy PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME selection_policy COMMAND test_selection_policy)
+
+add_executable(test_selection_store test_selection_store.cpp)
+target_link_libraries(test_selection_store
+    PRIVATE remmina_krunner_core KF6::ConfigCore Qt6::Test
+)
+
+add_test(NAME selection_store COMMAND test_selection_store)
+
+add_executable(test_instance_scanner test_instance_scanner.cpp)
+target_link_libraries(test_instance_scanner PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME instance_scanner COMMAND test_instance_scanner)
+
+add_executable(test_instance_registry test_instance_registry.cpp)
+target_link_libraries(test_instance_registry PRIVATE remmina_krunner_core Qt6::Test)
+
+add_test(NAME instance_registry COMMAND test_instance_registry)
+
+add_executable(test_instance_settings_model test_instance_settings_model.cpp)
+target_link_libraries(test_instance_settings_model PRIVATE remmina_krunner_kcm Qt6::Test)
+
+add_test(NAME instance_settings_model COMMAND test_instance_settings_model)
+
+add_executable(test_kcm test_kcm.cpp)
+target_compile_definitions(test_kcm PRIVATE
+    KCM_PLUGIN_PATH="$<TARGET_FILE:kcm_remmina_krunner>"
+)
+target_link_libraries(test_kcm
+    PRIVATE remmina_krunner_kcm KF6::CoreAddons KF6::KCMUtils KF6::KCMUtilsCore
+            Qt6::Test Qt6::Widgets
+)
+add_dependencies(test_kcm kcm_remmina_krunner)
+
+add_test(NAME kcm COMMAND test_kcm)
+set_tests_properties(kcm PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(process_probe_helper process_probe_helper.cpp)
+
+add_executable(test_qt_process_probe test_qt_process_probe.cpp)
+target_compile_definitions(test_qt_process_probe
+    PRIVATE PROCESS_PROBE_HELPER_PATH="$<TARGET_FILE:process_probe_helper>"
+)
+target_link_libraries(test_qt_process_probe PRIVATE remmina_krunner_core Qt6::Test)
+add_dependencies(test_qt_process_probe process_probe_helper)
+
+add_test(NAME qt_process_probe COMMAND test_qt_process_probe)
+
+add_executable(test_remmina_launcher test_remmina_launcher.cpp)
+target_link_libraries(test_remmina_launcher
+    PRIVATE remmina_krunner_core Qt6::DBus Qt6::Test
+)
+
+add_test(NAME remmina_launcher COMMAND test_remmina_launcher)
+
+find_package(KF6Runner REQUIRED)
+add_executable(test_dbus_types_kf6 test_dbus_types_kf6.cpp)
+target_link_libraries(test_dbus_types_kf6
+    PRIVATE remmina_krunner_core KF6::Runner
+)
+
+add_test(NAME dbus_types_kf6 COMMAND test_dbus_types_kf6)
+
+add_executable(test_dbus_contract test_dbus_contract.cpp)
+target_compile_definitions(test_dbus_contract
+    PRIVATE KRUNNER_INTERFACE_XML="${PROJECT_SOURCE_DIR}/data/org.kde.krunner1.xml"
+)
+target_link_libraries(test_dbus_contract
+    PRIVATE remmina_krunner_core Qt6::DBus Qt6::Test
+)
+
+find_program(DBUS_RUN_SESSION_EXECUTABLE NAMES dbus-run-session REQUIRED)
+add_test(NAME dbus_contract
+    COMMAND ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:test_dbus_contract>
+)
+
+add_executable(test_runner_service test_runner_service.cpp)
+target_link_libraries(test_runner_service
+    PRIVATE remmina_krunner_core Qt6::DBus Qt6::Test
+)
+
+add_test(NAME runner_service
+    COMMAND ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:test_runner_service>
+)
+set_tests_properties(dbus_contract runner_service PROPERTIES TIMEOUT 15)
+
+add_executable(test_rescan_cli test_rescan_cli.cpp)
+target_link_libraries(test_rescan_cli
+    PRIVATE remmina_krunner_application KF6::Runner Qt6::DBus Qt6::Test
+)
+krunner_configure_test(test_rescan_cli remmina-krunner
+    DESKTOP_FILE ${PROJECT_BINARY_DIR}/org.remminakrunner.KRunner.desktop
+)
+add_test(NAME rescan_cli
+    COMMAND ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:test_rescan_cli>
+)
+set_tests_properties(rescan_cli PROPERTIES TIMEOUT 15)
+
+add_test(NAME metadata
+    COMMAND ${CMAKE_COMMAND}
+        -DDESKTOP_FILE=${PROJECT_BINARY_DIR}/org.remminakrunner.KRunner.desktop
+        -DSERVICE_FILE=${PROJECT_BINARY_DIR}/org.remminakrunner.KRunner.service
+        -DEXPECTED_EXEC=${CMAKE_INSTALL_FULL_BINDIR}/remmina-krunner
+        -DEXPECTED_EXEC_VALUE=${REMMINA_KRUNNER_DBUS_EXEC}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_metadata.cmake
+)
+
+find_program(TEST_TIMEOUT_EXECUTABLE NAMES timeout REQUIRED)
+find_program(TEST_SLEEP_EXECUTABLE NAMES sleep REQUIRED)
+find_program(TEST_GDBUS_EXECUTABLE NAMES gdbus REQUIRED)
+find_program(TEST_ACTIVATION_BASH_EXECUTABLE NAMES bash REQUIRED)
+find_program(TEST_DBUS_DAEMON_EXECUTABLE NAMES dbus-daemon REQUIRED)
+add_test(NAME activation
+    COMMAND ${TEST_ACTIVATION_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_dbus_activation.sh
+        ${CMAKE_COMMAND}
+        ${TEST_ACTIVATION_BASH_EXECUTABLE}
+        ${TEST_TIMEOUT_EXECUTABLE}
+        ${DBUS_RUN_SESSION_EXECUTABLE}
+        ${TEST_GDBUS_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_BINARY_DIR}
+        $<TARGET_FILE:remmina-krunner>
+        ${TEST_DBUS_DAEMON_EXECUTABLE}
+        ${TEST_SLEEP_EXECUTABLE}
+)
+set_tests_properties(activation PROPERTIES TIMEOUT 20)
+
+add_executable(process_launcher_helper process_launcher_helper.cpp)
+target_link_libraries(process_launcher_helper PRIVATE Qt6::Core)
+
+add_executable(test_qt_process_launcher test_qt_process_launcher.cpp)
+target_compile_definitions(test_qt_process_launcher
+    PRIVATE PROCESS_LAUNCHER_HELPER_PATH="$<TARGET_FILE:process_launcher_helper>"
+)
+target_link_libraries(test_qt_process_launcher
+    PRIVATE remmina_krunner_core Qt6::Test
+)
+add_dependencies(test_qt_process_launcher process_launcher_helper)
+
+add_test(NAME qt_process_launcher COMMAND test_qt_process_launcher)
+
+find_program(TEST_BASH_EXECUTABLE NAMES bash REQUIRED)
+add_test(NAME ci_no_tests_error
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_ci_no_tests_error.sh
+        ${PROJECT_SOURCE_DIR}/scripts/ci.sh
+)
+
+add_test(NAME package_scripts
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_scripts.sh
+        ${PROJECT_BINARY_DIR}/packaging/install.sh
+        ${PROJECT_BINARY_DIR}/packaging/uninstall.sh
+        $<TARGET_FILE:package_runner_helper>
+        ${REMMINA_KRUNNER_PLUGIN_RELATIVE}
+)
+set_tests_properties(package_scripts PROPERTIES TIMEOUT 45)
+
+add_executable(package_runner_helper package_runner_helper.cpp)
+target_link_libraries(package_runner_helper PRIVATE Qt6::Core Qt6::DBus)
+
+add_test(NAME package_scripts_layouts
+    COMMAND ${CMAKE_COMMAND}
+        -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DTEST_ROOT=${PROJECT_BINARY_DIR}/package-layouts-test
+        -DPACKAGE_TEST=${CMAKE_CURRENT_SOURCE_DIR}/test_package_scripts.sh
+        -DRUNNER_HELPER=$<TARGET_FILE:package_runner_helper>
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_package_layouts.cmake
+)
+set_tests_properties(package_scripts_layouts PROPERTIES TIMEOUT 90)
+
+add_test(NAME install_inventory
+    COMMAND ${CMAKE_COMMAND}
+        -DMODE=inventory
+        -DBUILD_DIR=${PROJECT_BINARY_DIR}
+        -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DINSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
+        -DLAYOUT_FILE=${PROJECT_BINARY_DIR}/RemminaKRunnerInstallLayout.cmake
+        -DVALIDATOR=${PROJECT_SOURCE_DIR}/cmake/ValidateInstallInventory.cmake
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_install_inventory.cmake
+)
+set_tests_properties(install_inventory PROPERTIES TIMEOUT 30)
+
+add_test(NAME build_testing_off
+    COMMAND ${CMAKE_COMMAND}
+        -DMODE=build_testing_off
+        -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DTEST_ROOT=${PROJECT_BINARY_DIR}/build-testing-off-test
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_install_inventory.cmake
+)
+set_tests_properties(build_testing_off PROPERTIES TIMEOUT 120)
+
+find_program(TEST_GIT_EXECUTABLE NAMES git REQUIRED)
+find_program(TEST_ACTIONLINT_EXECUTABLE NAMES actionlint REQUIRED)
+find_program(TEST_TAR_EXECUTABLE NAMES tar REQUIRED)
+find_program(TEST_GZIP_EXECUTABLE NAMES gzip REQUIRED)
+find_program(TEST_SHA256SUM_EXECUTABLE NAMES sha256sum REQUIRED)
+find_program(TEST_FIND_EXECUTABLE NAMES find REQUIRED)
+find_program(TEST_STAT_EXECUTABLE NAMES stat REQUIRED)
+find_program(TEST_CMP_EXECUTABLE NAMES cmp REQUIRED)
+find_program(TEST_MV_EXECUTABLE NAMES mv REQUIRED)
+find_program(TEST_TOUCH_EXECUTABLE NAMES touch REQUIRED)
+
+add_test(NAME release_tag
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_release_tag.sh
+        ${PROJECT_SOURCE_DIR}/scripts/validate_release_tag.sh
+        ${PROJECT_SOURCE_DIR}/CMakeLists.txt
+)
+add_test(NAME release_package
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_release_package.sh
+        ${PROJECT_SOURCE_DIR}/scripts/package_release.sh
+        ${PROJECT_SOURCE_DIR}/scripts/validate_release_tag.sh
+        ${PROJECT_SOURCE_DIR}
+        $<TARGET_FILE:remmina-krunner>
+        $<TARGET_FILE:kcm_remmina_krunner>
+        ${PROJECT_BINARY_DIR}/org.remminakrunner.KRunner.desktop
+        ${PROJECT_BINARY_DIR}/org.remminakrunner.KRunner.service
+        ${PROJECT_BINARY_DIR}/packaging/install.sh
+        ${PROJECT_BINARY_DIR}/packaging/uninstall.sh
+        ${PROJECT_BINARY_DIR}/RemminaKRunnerInstallLayout.cmake
+        ${TEST_TAR_EXECUTABLE}
+        ${TEST_GZIP_EXECUTABLE}
+        ${TEST_SHA256SUM_EXECUTABLE}
+        ${TEST_FIND_EXECUTABLE}
+        ${TEST_STAT_EXECUTABLE}
+        ${TEST_CMP_EXECUTABLE}
+        ${TEST_MV_EXECUTABLE}
+        ${TEST_TOUCH_EXECUTABLE}
+        ${REMMINA_KRUNNER_PLUGIN_RELATIVE}
+)
+set_tests_properties(release_package PROPERTIES TIMEOUT 60)
+add_test(NAME publish_release
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_publish_release.sh
+        ${PROJECT_SOURCE_DIR}/scripts/publish_release.sh
+)
+set_tests_properties(publish_release PROPERTIES TIMEOUT 60)
+add_test(NAME release_workflow
+    COMMAND ${CMAKE_COMMAND}
+        -DREPO_ROOT=${PROJECT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_release_workflow.cmake
+)
+
+add_test(NAME ci_git_check
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_ci_git_check.sh
+        ${PROJECT_SOURCE_DIR}/scripts/check_repository_diff.sh
+        ${TEST_GIT_EXECUTABLE}
+)
+
+add_test(NAME ci_diff_base
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_ci_diff_base.sh
+        ${PROJECT_SOURCE_DIR}/scripts/resolve_ci_diff_base.sh
+        ${TEST_GIT_EXECUTABLE}
+)
+
+add_test(NAME repository_config
+    COMMAND ${CMAKE_COMMAND}
+        -DREPO_ROOT=${PROJECT_SOURCE_DIR}
+        -DBASH_EXECUTABLE=${TEST_BASH_EXECUTABLE}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_repository_config.cmake
+)
+
+add_test(NAME workflow_actionlint
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_workflow_actionlint.sh
+        ${TEST_ACTIONLINT_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/.github/workflows/ci.yml
+        ${PROJECT_SOURCE_DIR}/.github/workflows/release.yml
+)
+
+add_test(NAME documentation
+    COMMAND ${CMAKE_COMMAND}
+        -DREPO_ROOT=${PROJECT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_documentation.cmake
+)

@@ -318,6 +318,7 @@ struct ScanEnvironment {
     QString flatpakExecutable;
     QString snapLauncher;
     QString userHome;
+    QString snapMountRoot = QStringLiteral("/snap");
 };
 
 struct InstanceScanResult {
@@ -333,8 +334,10 @@ public:
 ```
 
 Use `QTemporaryDir` to create executable `remmina` fixtures. Test PATH order,
-non-executable rejection, canonical deduplication, paths with spaces, and
-exclusion when the canonical path belongs to `/snap`.
+non-executable rejection, canonical deduplication while preserving the first
+clean absolute lexical launcher, stable identity across symlink retargets,
+paths with spaces, and exclusion when the canonical path belongs to the
+injected Snap mount root.
 
 **Step 2: Write failing Flatpak and Snap tests**
 
@@ -349,8 +352,8 @@ malformed lines, duplicate refs, deterministic order, command timeout, and
 Flatpak failure alongside successful native results.
 
 Test an executable Snap launcher, missing launcher, canonical launcher, and a
-Snap failure that does not remove other results. Stable IDs must omit Flatpak
-commit and Snap revision.
+Snap failure that does not remove other results. Stable IDs must omit native
+symlink targets, Flatpak commits, and Snap revisions.
 
 Run `./scripts/container.sh test instance_scanner`; expect failure.
 
@@ -366,7 +369,10 @@ struct ProbeResult {
 ```
 
 `QtProcessProbe` uses `QProcess`, a fixed timeout, a fixed maximum output size,
-discarded stderr, and no shell. Build profile environments as follows:
+discarded stderr, and no shell. It runs only on the `QCoreApplication` thread
+before shutdown; the main event loop must resume afterward so deferred reaping
+can complete in the pathological case where a killed child exceeds the bounded
+reaping grace period. Build profile environments as follows:
 
 - native: current host XDG homes;
 - Flatpak: `~/.var/app/org.remmina.Remmina/config` and `data`;
@@ -554,7 +560,10 @@ std::optional<LocatedProfileDirectory> locateProfileDirectory(
 Build temporary native, Flatpak, and Snap homes. Test valid custom
 `datadir_path`, nonexistent custom fallback, legacy fallback, XDG data
 fallback, applicable native system-data fallback, no directory, relative and
-escaped preference values, and sandbox launch-path mapping.
+escaped preference values, host-equal Flatpak/Snap launch paths, component-safe
+sandbox roots, Snap current/active-revision/common custom paths, rejection of
+other revisions and external custom sandbox paths, and bounded symlink
+resolution.
 
 **Step 2: Write failing repository tests**
 
@@ -591,8 +600,11 @@ Enumerate without changing the directory. Generate opaque IDs from a
 collision-resistant hash of stable instance ID plus canonical profile identity;
 never expose the hash input over D-Bus.
 
-Cache parsed records by fingerprint so unchanged files are not reparsed on a
-new snapshot verification.
+Cache parsed records only for the current instance-directory scope. Compare an
+internal device/inode/size/nanosecond-mtime/ctime signature, do not cache
+transient unreadable results, and revalidate identity and signature after
+parsing with one bounded retry so stale output cannot poison the cache. The
+repository is single-thread confined.
 
 **Step 4: Verify and commit**
 
@@ -763,6 +775,13 @@ case-insensitive standalone-`rem` match regex and trigger words supported by
 DBus2.
 
 **Step 4: Verify and commit**
+
+Integration caveat for Task 12: current KF6 `DBusRunner::requestConfig()` iterates
+the sorted `QVariantMap`, applies `MatchRegex`, and then applies `TriggerWords`;
+`setTriggerWords()` replaces the earlier regular expression with its generated
+prefix expression. Task 10 deliberately returns both keys required by its
+contract. Task 12 metadata/activation integration tests must verify the effective
+standalone, case-insensitive trigger behavior against the installed KF6 version.
 
 ```bash
 ./scripts/container.sh test 'runner_service|dbus_contract'

@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
+# SPDX-License-Identifier: 0BSD
+
+# Refresh the Fedora digest deliberately when updating the development toolchain.
+FROM registry.fedoraproject.org/fedora:44@sha256:b5f1d8384c4780020a9b965ade8758b0e4a816dd2f15925666d744ba382fce1e
+
+ARG ACTIONLINT_VERSION=1.7.12
+
+RUN set -eux; \
+    dnf install -y \
+        bash \
+        binutils \
+        cmake \
+        clang-tools-extra \
+        coreutils \
+        curl \
+        dbus-daemon \
+        extra-cmake-modules \
+        findutils \
+        gcc-c++ \
+        git-core \
+        gzip \
+        kf6-kcmutils-devel \
+        kf6-kconfig-devel \
+        kf6-kcoreaddons-devel \
+        kf6-ki18n-devel \
+        kf6-knotifications-devel \
+        kf6-krunner-devel \
+        libasan \
+        libubsan \
+        ninja-build \
+        pkgconf-pkg-config \
+        qt6-qtbase-devel \
+        shadow-utils \
+        tar; \
+    case "$(uname -m)" in \
+        x86_64) \
+            actionlint_arch=amd64; \
+            actionlint_sha256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 \
+            ;; \
+        aarch64) \
+            actionlint_arch=arm64; \
+            actionlint_sha256=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6 \
+            ;; \
+        *) \
+            echo "Unsupported actionlint architecture: $(uname -m)" >&2; \
+            exit 1 \
+            ;; \
+    esac; \
+    actionlint_archive=/tmp/actionlint.tar.gz; \
+    curl --fail --show-error --location \
+        --output "${actionlint_archive}" \
+        "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_${actionlint_arch}.tar.gz"; \
+    printf '%s  %s\n' "${actionlint_sha256}" "${actionlint_archive}" \
+        | sha256sum --check; \
+    tar -xzf "${actionlint_archive}" -C /usr/local/bin actionlint; \
+    chmod 0755 /usr/local/bin/actionlint; \
+    rm -f -- "${actionlint_archive}"; \
+    actionlint --version; \
+    clang-format --version; \
+    useradd --create-home --shell /bin/bash developer; \
+    dnf clean all
+
+WORKDIR /workspace
+USER developer

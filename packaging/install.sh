@@ -1,0 +1,485 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
+# SPDX-License-Identifier: 0BSD
+set -euo pipefail
+
+die() { echo "$1" >&2; exit "${2:-1}"; }
+validate_path() {
+    local name=$1 value=$2
+    [[ -n ${value} && ${value} == /* && ${value} != *$'\n'* && ${value} != *$'\r'* ]] ||
+        die "${name} must be a nonempty absolute path without newlines" 64
+    [[ ${value} != *'/../'* && ${value} != */.. &&
+       ${value} != *'/./'* && ${value} != */. && ${value} != *//* ]] ||
+        die "${name} must be a normalized absolute path" 64
+    [[ ${value} != / && ${value} != /usr && ${value} != /usr/* &&
+       ${value} != /etc && ${value} != /etc/* && ${value} != /var && ${value} != /var/* ]] ||
+        die "${name} must identify a user-local path" 64
+}
+validate_os_release_override() {
+    local value=$1
+    [[ -n ${value} && ${value} == /* && ${value} != / &&
+       ${value} != *$'\n'* && ${value} != *$'\r'* &&
+       ${value} != *'/../'* && ${value} != */.. &&
+       ${value} != *'/./'* && ${value} != */. && ${value} != *//* ]] ||
+        die "REMMINA_KRUNNER_OS_RELEASE_FILE must be a bounded normalized absolute path" 64
+    [[ -f ${value} && ! -L ${value} && -r ${value} ]] ||
+        die "The OS release record must be a readable regular non-symlink file" 65
+}
+resolve_os_release_file() {
+    if [[ -n ${REMMINA_KRUNNER_OS_RELEASE_FILE:-} ]]; then
+        validate_os_release_override "${REMMINA_KRUNNER_OS_RELEASE_FILE}"
+        printf '%s\n' "${REMMINA_KRUNNER_OS_RELEASE_FILE}"
+        return
+    fi
+
+    local system_record=/etc/os-release target resolved
+    if [[ -L ${system_record} ]]; then
+        target=$(readlink -- "${system_record}") ||
+            die "Unable to read the system OS release link" 65
+        [[ ${target} == ../usr/lib/os-release ]] ||
+            die "The system OS release link is not canonical" 65
+        resolved=$(readlink -f -- "${system_record}") ||
+            die "Unable to resolve the system OS release record" 65
+        [[ ${resolved} == /usr/lib/os-release && -f ${resolved} &&
+           ! -L ${resolved} && -r ${resolved} ]] ||
+            die "The canonical OS release target must be a readable regular non-symlink file" 65
+        printf '%s\n' "${resolved}"
+        return
+    fi
+
+    [[ -f ${system_record} && -r ${system_record} ]] ||
+        die "The OS release record must be a readable regular non-symlink file" 65
+    printf '%s\n' "${system_record}"
+}
+require_supported_platform() {
+    [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] ||
+        die "This release bundle supports Fedora Linux 44 x86_64 only" 65
+
+    local os_release_file
+    os_release_file=$(resolve_os_release_file)
+    local line key value platform_id= platform_version=
+    declare -A seen_keys=()
+    while IFS= read -r line || [[ -n ${line} ]]; do
+        [[ ${line} != *$'\r'* ]] || die "The OS release record is malformed" 65
+        [[ ${line} =~ ^[[:space:]]*$ || ${line} =~ ^[[:space:]]*# ]] && continue
+        [[ ${line} =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]] ||
+            die "The OS release record is malformed" 65
+        key=${BASH_REMATCH[1]}
+        value=${BASH_REMATCH[2]}
+        [[ ${seen_keys["${key}"]+present} != present ]] ||
+            die "The OS release record contains a duplicate key" 65
+        seen_keys["${key}"]=1
+        case ${key} in
+            ID)
+                case ${value} in
+                    fedora|'"fedora"') platform_id=fedora ;;
+                    *) die "This release bundle supports Fedora Linux 44 x86_64 only" 65 ;;
+                esac
+                ;;
+            VERSION_ID)
+                case ${value} in
+                    44|'"44"') platform_version=44 ;;
+                    *) die "This release bundle supports Fedora Linux 44 x86_64 only" 65 ;;
+                esac
+                ;;
+        esac
+    done <"${os_release_file}"
+    [[ ${platform_id} == fedora && ${platform_version} == 44 ]] ||
+        die "This release bundle supports Fedora Linux 44 x86_64 only" 65
+}
+require_commands() {
+    local command_name
+    for command_name in find flock grep id install ldd mkdir mktemp mv readlink rm rmdir sleep sort stat uname kbuildsycoca6; do
+        command -v "${command_name}" >/dev/null 2>&1 ||
+            die "Required command is unavailable: ${command_name}" 69
+    done
+}
+
+home_directory=${HOME:-}
+validate_path HOME "${home_directory}"
+install_prefix=${REMMINA_KRUNNER_INSTALL_PREFIX:-${home_directory}/.local}
+validate_path REMMINA_KRUNNER_INSTALL_PREFIX "${install_prefix}"
+if [[ -n ${XDG_DATA_HOME:-} ]]; then
+    data_home=${XDG_DATA_HOME}
+else
+    data_home=${home_directory}/.local/share
+fi
+validate_path XDG_DATA_HOME "${data_home}"
+
+require_commands
+require_supported_platform
+
+script_path=$(readlink -f -- "${BASH_SOURCE[0]}") || die "Unable to resolve installer path" 66
+package_root=${script_path%/*}
+plugin_relative=@REMMINA_KRUNNER_PLUGIN_RELATIVE@
+expected_files=(
+    LICENSE
+    LICENSES/0BSD.txt
+    LICENSES/LGPL-2.0-or-later.txt
+    bin/remmina-krunner
+    install.sh
+    "${plugin_relative}"
+    share/dbus-1/services/org.remminakrunner.KRunner.service
+    share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop
+    uninstall.sh
+)
+mapfile -t actual_files < <(find "${package_root}" -mindepth 1 -type f -printf '%P\n' | LC_ALL=C sort)
+mapfile -t sorted_expected < <(printf '%s\n' "${expected_files[@]}" | LC_ALL=C sort)
+[[ ${actual_files[*]} == "${sorted_expected[*]}" ]] || die "Release bundle inventory is invalid" 66
+declare -A expected_directories=()
+for expected_file in "${expected_files[@]}"; do
+    expected_parent=${expected_file%/*}
+    while [[ ${expected_parent} != "${expected_file}" && ${expected_parent} != . ]]; do
+        expected_directories["${expected_parent}"]=1
+        next_parent=${expected_parent%/*}
+        [[ ${next_parent} != "${expected_parent}" ]] || break
+        expected_parent=${next_parent}
+    done
+done
+
+while IFS= read -r -d '' entry; do
+    relative=${entry#"${package_root}"/}
+    [[ ! -L ${entry} ]] || die "Release bundle contains a symbolic link: ${relative}" 66
+    if [[ -d ${entry} ]]; then
+        [[ ${expected_directories["${relative}"]:-0} == 1 ]] ||
+            die "Release bundle contains an unexpected directory: ${relative}" 66
+    elif [[ -f ${entry} ]]; then
+        [[ $(stat -c '%h' -- "${entry}") == 1 ]] ||
+            die "Release bundle file must not be hard-linked: ${relative}" 66
+    else
+        die "Release bundle contains a non-regular entry: ${relative}" 66
+    fi
+done < <(find "${package_root}" -mindepth 1 -print0)
+
+payload_binary=${package_root}/bin/remmina-krunner
+payload_plugin=${package_root}/${plugin_relative}
+payload_desktop=${package_root}/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop
+payload_service=${package_root}/share/dbus-1/services/org.remminakrunner.KRunner.service
+for executable in "${payload_binary}" "${package_root}/install.sh" "${package_root}/uninstall.sh"; do
+    [[ $(stat -c '%a' -- "${executable}") == 755 ]] ||
+        die "Release bundle executable must have mode 0755: ${executable##*/}" 66
+done
+[[ $(stat -c '%a' -- "${payload_plugin}") == 755 ]] ||
+    die "Release bundle plugin must have mode 0755" 66
+for data_file in "${payload_desktop}" "${payload_service}" \
+                 "${package_root}/LICENSE" "${package_root}/LICENSES/0BSD.txt" \
+                 "${package_root}/LICENSES/LGPL-2.0-or-later.txt"; do
+    [[ $(stat -c '%a' -- "${data_file}") == 644 ]] ||
+        die "Release bundle data files must have mode 0644" 66
+done
+
+for runtime_file in "${payload_binary}" "${payload_plugin}"; do
+    if ! ldd_output=$(LC_ALL=C ldd -- "${runtime_file}" 2>&1) || [[ ${ldd_output} == *'not found'* ]]; then
+        printf '%s\n' "${ldd_output}" >&2
+        die "Install the missing Fedora Linux 44 runtime libraries, then retry." 67
+    fi
+done
+
+mapfile -t exec_lines < <(grep '^Exec=' "${payload_service}" || true)
+[[ ${#exec_lines[@]} -eq 1 ]] || die "D-Bus service metadata must contain exactly one Exec entry" 66
+mapfile -t kcm_lines < <(grep '^X-KDE-ConfigModule=' "${payload_desktop}" || true)
+[[ ${#kcm_lines[@]} -eq 1 ]] ||
+    die "KRunner metadata must contain exactly one configuration module entry" 66
+
+binary_path=${install_prefix}/bin/remmina-krunner
+plugin_path=${install_prefix}/${plugin_relative}
+desktop_path=${data_home}/krunner/dbusplugins/org.remminakrunner.KRunner.desktop
+service_path=${data_home}/dbus-1/services/org.remminakrunner.KRunner.service
+destination_paths=("${binary_path}" "${plugin_path}" "${desktop_path}" "${service_path}")
+for destination in "${destination_paths[@]}"; do
+    [[ ! -d ${destination} && ! -L ${destination} ]] ||
+        die "Install destination must be an absent or regular file: ${destination}" 68
+done
+
+acquire_install_lock() {
+    local runtime_root=${XDG_RUNTIME_DIR:-/tmp}
+    [[ ${runtime_root} == /* && ${runtime_root} != *$'\n'* && ${runtime_root} != *$'\r'* &&
+       ${runtime_root} != *'/../'* && ${runtime_root} != */.. &&
+       ${runtime_root} != *'/./'* && ${runtime_root} != */. && ${runtime_root} != *//* ]] ||
+        die "XDG_RUNTIME_DIR must be a normalized absolute path" 64
+    local user_id lock_directory lock_file
+    user_id=$(id -u)
+    lock_directory=${runtime_root}/remmina-krunner-${user_id}
+    if [[ ! -e ${lock_directory} && ! -L ${lock_directory} ]]; then
+        mkdir -m 0700 -- "${lock_directory}"
+    fi
+    [[ -d ${lock_directory} && ! -L ${lock_directory} &&
+       $(stat -c '%u' -- "${lock_directory}") == "${user_id}" &&
+       $(stat -c '%a' -- "${lock_directory}") == 700 ]] ||
+        die "Refusing unsafe installation lock directory: ${lock_directory}" 68
+    lock_file=${lock_directory}/transaction.lock
+    if [[ -e ${lock_file} || -L ${lock_file} ]]; then
+        [[ -f ${lock_file} && ! -L ${lock_file} &&
+           $(stat -c '%u' -- "${lock_file}") == "${user_id}" ]] ||
+            die "Refusing unsafe installation lock file: ${lock_file}" 68
+    fi
+    (umask 077; : >>"${lock_file}")
+    exec {install_lock_fd}<>"${lock_file}"
+    flock --exclusive --nonblock "${install_lock_fd}" ||
+        die "Another Remmina KRunner install or uninstall is already running." 75
+}
+
+acquire_install_lock
+
+process_start_time() {
+    local pid=$1 stat_line tail
+    IFS= read -r stat_line 2>/dev/null <"/proc/${pid}/stat" || return 1
+    [[ ${stat_line} == *') '* ]] || return 1
+    tail=${stat_line##*) }
+    local -a fields=()
+    read -r -a fields <<<"${tail}"
+    [[ ${#fields[@]} -ge 20 && ${fields[19]} =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "${fields[19]}"
+}
+stop_installed_runner() {
+    [[ -e ${binary_path} ]] || return 0
+    local canonical_directory canonical_binary exe_link pid identity before after current
+    canonical_directory=$(readlink -f -- "${binary_path%/*}") || return 0
+    canonical_binary=${canonical_directory}/${binary_path##*/}
+    local -a pids=() starts=()
+    for exe_link in /proc/[0-9]*/exe; do
+        pid=${exe_link#/proc/}; pid=${pid%/exe}
+        [[ ${pid} =~ ^[0-9]+$ && ${pid} != $$ ]] || continue
+        identity=$(readlink -- "${exe_link}" 2>/dev/null) || continue
+        [[ ${identity} == "${canonical_binary}" || ${identity} == "${canonical_binary} (deleted)" ]] || continue
+        before=$(process_start_time "${pid}") || continue
+        after=$(process_start_time "${pid}") || continue
+        current=$(readlink -- "${exe_link}" 2>/dev/null) || continue
+        [[ ${before} == "${after}" && ( ${current} == "${canonical_binary}" || ${current} == "${canonical_binary} (deleted)" ) ]] || continue
+        kill -TERM "${pid}" 2>/dev/null || true
+        pids+=("${pid}"); starts+=("${before}")
+    done
+    local attempt index all_stopped
+    for attempt in {1..40}; do
+        all_stopped=1
+        for index in "${!pids[@]}"; do
+            current=$(readlink -- "/proc/${pids[index]}/exe" 2>/dev/null) || continue
+            after=$(process_start_time "${pids[index]}") || continue
+            if [[ ${after} == "${starts[index]}" &&
+                  ( ${current} == "${canonical_binary}" || ${current} == "${canonical_binary} (deleted)" ) ]]; then
+                all_stopped=0
+            fi
+        done
+        [[ ${all_stopped} == 1 ]] && return 0
+        sleep 0.05
+    done
+    die "Running Remmina KRunner process did not terminate; no installed files were changed." 68
+}
+
+directories=("${binary_path%/*}" "${plugin_path%/*}" "${desktop_path%/*}" "${service_path%/*}")
+created_directories=()
+staged_paths=("" "" "" "")
+backup_paths=("" "" "" "")
+had_original=(0 0 0 0)
+backup_intended=(0 0 0 0)
+original_moved=(0 0 0 0)
+replacement_intended=(0 0 0 0)
+replacement_moved=(0 0 0 0)
+replacement_identities=("" "" "" "")
+transaction_active=0
+preserve_backups=0
+
+rollback_transaction() {
+    local index destination backup stage current_identity rollback_ok=1
+    for index in 3 2 1 0; do
+        destination=${destination_paths[index]}
+        backup=${backup_paths[index]}
+        if [[ ${backup_intended[index]} == 1 ]]; then
+            if [[ -e ${backup} || -L ${backup} ]]; then
+                if [[ -e ${destination} || -L ${destination} ]]; then
+                    rm -f -- "${destination}" || rollback_ok=0
+                fi
+                if [[ ! -e ${destination} && ! -L ${destination} ]] &&
+                   mv -fT -- "${backup}" "${destination}"; then
+                    backup_paths[index]=
+                    backup_intended[index]=0
+                    original_moved[index]=0
+                else
+                    rollback_ok=0
+                fi
+            elif [[ -e ${destination} || -L ${destination} ]]; then
+                backup_paths[index]=
+                backup_intended[index]=0
+                original_moved[index]=0
+            else
+                rollback_ok=0
+            fi
+        elif [[ ${had_original[index]} == 0 &&
+                ${replacement_intended[index]} == 1 ]]; then
+            stage=${staged_paths[index]}
+            if [[ ! -e ${stage} && ! -L ${stage} &&
+                  ( -e ${destination} || -L ${destination} ) ]]; then
+                current_identity=$(stat -c '%d:%i' -- "${destination}") || current_identity=
+                if [[ -n ${current_identity} &&
+                      ${current_identity} == "${replacement_identities[index]}" ]]; then
+                    rm -f -- "${destination}" || rollback_ok=0
+                else
+                    rollback_ok=0
+                fi
+            fi
+        fi
+        replacement_intended[index]=0
+        replacement_moved[index]=0
+    done
+    [[ ${rollback_ok} == 1 ]]
+}
+
+cleanup() {
+    local status=$? index rollback_status=0
+    trap - EXIT
+    set +e
+    if [[ ${transaction_active} == 1 ]]; then
+        rollback_transaction
+        rollback_status=$?
+        if [[ ${rollback_status} != 0 ]]; then
+            preserve_backups=1
+            echo "Rollback failed; original files may remain in bounded backup files beside their destinations." >&2
+            status=74
+        fi
+    fi
+    for index in 0 1 2 3; do
+        [[ -z ${staged_paths[index]} || ! -e ${staged_paths[index]} ]] || rm -f -- "${staged_paths[index]}" || status=74
+        if [[ ${preserve_backups} == 0 ]]; then
+            [[ -z ${backup_paths[index]} || ! -e ${backup_paths[index]} ]] || rm -f -- "${backup_paths[index]}" || status=74
+        fi
+    done
+    local directory_index directory
+    for ((directory_index = ${#created_directories[@]} - 1;
+         directory_index >= 0;
+         --directory_index)); do
+        directory=${created_directories[directory_index]}
+        if [[ -d ${directory} && ! -L ${directory} ]]; then
+            rmdir -- "${directory}" 2>/dev/null || true
+        fi
+    done
+    exit "${status}"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+ensure_destination_directory() {
+    local destination=$1 candidate=${1} parent pending_directory
+    local -a pending_directories=()
+    while [[ ${candidate} != / ]]; do
+        if [[ -d ${candidate} && ! -L ${candidate} ]]; then
+            break
+        fi
+        if [[ -e ${candidate} || -L ${candidate} ]]; then
+            die "Install destination parent must be a real directory: ${candidate}" 68
+        fi
+        pending_directories=("${candidate}" "${pending_directories[@]}")
+        parent=${candidate%/*}
+        candidate=${parent:-/}
+    done
+
+    for pending_directory in "${pending_directories[@]}"; do
+        if mkdir -m 0755 -- "${pending_directory}"; then
+            created_directories+=("${pending_directory}")
+        elif [[ -d ${pending_directory} && ! -L ${pending_directory} ]]; then
+            continue
+        else
+            die "Unable to create install destination directory: ${pending_directory}" 68
+        fi
+    done
+    [[ -d ${destination} && ! -L ${destination} ]] ||
+        die "Install destination parent must be a real directory: ${destination}" 68
+}
+
+for directory in "${directories[@]}"; do
+    ensure_destination_directory "${directory}"
+done
+
+for index in 0 1 2 3; do
+    staged_paths[index]=$(mktemp "${destination_paths[index]%/*}/.${destination_paths[index]##*/}.stage.XXXXXX")
+done
+install -m 0755 -- "${payload_binary}" "${staged_paths[0]}"
+install -m 0755 -- "${payload_plugin}" "${staged_paths[1]}"
+install -m 0644 /dev/null "${staged_paths[2]}"
+install -m 0644 /dev/null "${staged_paths[3]}"
+escape_desktop_entry_value() {
+    local value=$1 result= character index
+    for ((index = 0; index < ${#value}; ++index)); do
+        character=${value:index:1}
+        case ${character} in
+            ' ') result+='\s' ;;
+            $'\t') result+='\t' ;;
+            \\) result+='\\' ;;
+            *) result+="${character}" ;;
+        esac
+    done
+    printf '%s' "${result}"
+}
+escaped_plugin=$(escape_desktop_entry_value "${plugin_path}")
+while IFS= read -r line || [[ -n ${line} ]]; do
+    if [[ ${line} == X-KDE-ConfigModule=* ]]; then
+        printf 'X-KDE-ConfigModule=%s\n' "${escaped_plugin}" >>"${staged_paths[2]}"
+    else
+        printf '%s\n' "${line}" >>"${staged_paths[2]}"
+    fi
+done <"${payload_desktop}"
+escape_dbus_exec_argument() {
+    local value=$1 result= character index
+    for ((index = 0; index < ${#value}; ++index)); do
+        character=${value:index:1}
+        case ${character} in
+            \\) result+='\\\\' ;;
+            '"') result+='\\"' ;;
+            *) result+="${character}" ;;
+        esac
+    done
+    printf '%s' "${result}"
+}
+escaped_binary=$(escape_dbus_exec_argument "${binary_path}")
+while IFS= read -r line || [[ -n ${line} ]]; do
+    if [[ ${line} == Exec=* ]]; then
+        printf 'Exec="%s"\n' "${escaped_binary}" >>"${staged_paths[3]}"
+    else
+        printf '%s\n' "${line}" >>"${staged_paths[3]}"
+    fi
+done <"${payload_service}"
+
+for index in 0 1 2 3; do
+    replacement_identities[index]=$(stat -c '%d:%i' -- "${staged_paths[index]}")
+done
+
+stop_installed_runner
+transaction_active=1
+for index in 0 1 2 3; do
+    if [[ -e ${destination_paths[index]} ]]; then
+        had_original[index]=1
+        backup_paths[index]=$(mktemp "${destination_paths[index]%/*}/.${destination_paths[index]##*/}.backup.XXXXXX")
+        rm -f -- "${backup_paths[index]}"
+        backup_intended[index]=1
+        mv -fT -- "${destination_paths[index]}" "${backup_paths[index]}"
+        original_moved[index]=1
+    fi
+done
+for index in 0 1 2 3; do
+    replacement_intended[index]=1
+    mv -fT -- "${staged_paths[index]}" "${destination_paths[index]}"
+    staged_paths[index]=
+    replacement_moved[index]=1
+done
+transaction_active=0
+for index in 0 1 2 3; do
+    [[ -z ${backup_paths[index]} ]] || rm -f -- "${backup_paths[index]}"
+    backup_paths[index]=
+done
+created_directories=()
+
+post_status=0
+if ! "${binary_path}" --rescan; then
+    echo "Files were installed, but the initial Remmina instance scan failed. Run '${binary_path}' --rescan." >&2
+    post_status=70
+fi
+if ! kbuildsycoca6 >/dev/null; then
+    echo "Files were installed, but KDE service cache refresh failed. Run kbuildsycoca6, then restart KRunner." >&2
+    post_status=70
+fi
+if command -v kquitapp6 >/dev/null 2>&1; then
+    kquitapp6 krunner >/dev/null 2>&1 || true
+fi
+[[ ${post_status} == 0 ]] || exit "${post_status}"
+printf 'Installed Remmina KRunner integration.\n'

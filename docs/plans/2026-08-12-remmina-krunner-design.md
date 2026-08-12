@@ -87,7 +87,7 @@ An instance descriptor contains:
 - user-facing description;
 - exact launcher and fixed launcher prefix arguments;
 - configuration and data environment;
-- profile-path mapping needed by its sandbox; and
+- verified profile roots visible to its sandbox; and
 - deterministic priority within its packaging type.
 
 The scanner discovers applications, never profiles:
@@ -95,9 +95,11 @@ The scanner discovers applications, never profiles:
 ### Native
 
 Enumerate every executable named `remmina` in every `PATH` directory. Resolve
-canonical paths, remove duplicates, and exclude Snap launcher/canonical paths
-so the same Snap is not also reported as native. Native instances retain PATH
-order and use the canonical executable path as part of their stable identity.
+canonical paths only to validate executables, remove duplicates, and classify
+Snap targets so the same Snap is not also reported as native. Native instances
+retain PATH order and use the first clean absolute lexical launcher path for
+launch and stable identity, so retargeting a versioned symlink during an update
+does not discard the selection.
 
 ### Flatpak
 
@@ -158,8 +160,8 @@ Only the selected instance's profile environment is used.
 - Native instances use the host XDG configuration and data locations.
 - Flatpak instances use the `org.remmina.Remmina` per-application XDG
   locations below `~/.var/app`.
-- Snap uses the Remmina Snap's current user-data environment below
-  `~/snap/remmina`.
+- Snap uses the Remmina Snap's current revision user-data environment and
+  revision-independent common data below `~/snap/remmina`.
 
 Within that environment, profile location mirrors Remmina's precedence:
 
@@ -169,9 +171,16 @@ Within that environment, profile location mirrors Remmina's precedence:
 4. applicable native system data directories.
 
 Only regular or Remmina-compatible linked files ending in `.remmina` are
-offered to the parser. Paths passed during activation are translated to the
-selected sandbox's view when needed. Profile discovery is read-only and never
-creates a missing Remmina directory.
+offered to the parser. Flatpak's per-application XDG paths below
+`~/.var/app/org.remmina.Remmina` and Snap's paths below the stable
+`~/snap/remmina/current`, its resolved active revision, or
+`~/snap/remmina/common` are already launcher-visible, so their host and launch
+paths remain identical. A Snap custom path for another revision is rejected.
+A sandbox custom path is accepted only when both its lexical and resolved paths
+are component-safely beneath the corresponding verified root derived from that
+instance's known profile locations; an arbitrary host-readable path is not
+assumed to be sandbox-visible. Profile discovery is read-only and never creates
+a missing Remmina directory.
 
 ## Profile parsing and privacy
 
@@ -364,8 +373,8 @@ configuration, clock, watcher, notifier, and launcher boundaries:
 
 ### Instance discovery
 
-- multiple native executables, PATH ordering, canonical deduplication, and
-  Snap exclusion;
+- multiple native executables, PATH ordering, stable lexical launchers across
+  symlink retargets, canonical deduplication, and Snap exclusion;
 - user and named-system Flatpak installations;
 - Snap discovery;
 - stable identities across application updates;
@@ -385,7 +394,7 @@ configuration, clock, watcher, notifier, and launcher boundaries:
 
 - native, Flatpak, and Snap configuration/data roots;
 - custom data-directory and legacy precedence;
-- sandbox-visible activation path mapping;
+- component-safe sandbox-root validation and host-equal activation paths;
 - valid, incomplete, malformed, linked, removed, and unreadable fixtures;
 - label splitting and display preservation;
 - proof that passwords and unrelated settings are not retained or returned.
