@@ -4,16 +4,13 @@
 #include <QtTest>
 
 class SmokeTest : public QObject {
-    Q_OBJECT
+  Q_OBJECT
 
 private slots:
-    void projectBuilds();
+  void projectBuilds();
 };
 
-void SmokeTest::projectBuilds()
-{
-    QVERIFY(true);
-}
+void SmokeTest::projectBuilds() { QVERIFY(true); }
 
 QTEST_APPLESS_MAIN(SmokeTest)
 

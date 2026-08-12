@@ -7,23 +7,23 @@
 #include <QStringList>
 
 enum class InstanceKind {
-    Native,
-    Flatpak,
-    Snap,
+  Native,
+  Flatpak,
+  Snap,
 };
 
 struct ProfileEnvironment {
-    QString configHome;
-    QString dataHome;
-    QString legacyHome;
-    QStringList systemDataHomes;
+  QString configHome;
+  QString dataHome;
+  QString legacyHome;
+  QStringList systemDataHomes;
 };
 
 struct RemminaInstance {
-    QString id;
-    InstanceKind kind;
-    QString displayName;
-    QString executable;
-    QStringList launcherPrefix;
-    ProfileEnvironment profiles;
+  QString id;
+  InstanceKind kind;
+  QString displayName;
+  QString executable;
+  QStringList launcherPrefix;
+  ProfileEnvironment profiles;
 };

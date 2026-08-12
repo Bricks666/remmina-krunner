@@ -12,52 +12,49 @@
 #include <utility>
 
 struct RecordedProbeCall {
-    QString executable;
-    QStringList arguments;
+  QString executable;
+  QStringList arguments;
 };
 
 class RecordingProcessProbe final : public ProcessProbe {
 public:
-    void expect(QString executable, QStringList arguments, ProbeResult result)
-    {
-        expectations_.append({
-            .call = {
+  void expect(QString executable, QStringList arguments, ProbeResult result) {
+    expectations_.append({
+        .call =
+            {
                 .executable = std::move(executable),
                 .arguments = std::move(arguments),
             },
-            .result = std::move(result),
-        });
+        .result = std::move(result),
+    });
+  }
+
+  ProbeResult run(const QString &executable, const QStringList &arguments) override {
+    calls.append({.executable = executable, .arguments = arguments});
+    if (nextExpectation_ >= expectations_.size()) {
+      unexpectedCall_ = true;
+      return {.status = ProbeResult::Status::Failed, .standardOutput = {}};
     }
 
-    ProbeResult run(const QString &executable, const QStringList &arguments) override
-    {
-        calls.append({.executable = executable, .arguments = arguments});
-        if (nextExpectation_ >= expectations_.size()) {
-            unexpectedCall_ = true;
-            return {.status = ProbeResult::Status::Failed, .standardOutput = {}};
-        }
+    const Expectation &expectation = expectations_.at(nextExpectation_++);
+    exactCalls_ = exactCalls_ && expectation.call.executable == executable && expectation.call.arguments == arguments;
+    return expectation.result;
+  }
 
-        const Expectation &expectation = expectations_.at(nextExpectation_++);
-        exactCalls_ = exactCalls_ && expectation.call.executable == executable
-            && expectation.call.arguments == arguments;
-        return expectation.result;
-    }
+  [[nodiscard]] bool expectationsMet() const {
+    return exactCalls_ && !unexpectedCall_ && nextExpectation_ == expectations_.size();
+  }
 
-    [[nodiscard]] bool expectationsMet() const
-    {
-        return exactCalls_ && !unexpectedCall_ && nextExpectation_ == expectations_.size();
-    }
-
-    QList<RecordedProbeCall> calls;
+  QList<RecordedProbeCall> calls;
 
 private:
-    struct Expectation {
-        RecordedProbeCall call;
-        ProbeResult result;
-    };
+  struct Expectation {
+    RecordedProbeCall call;
+    ProbeResult result;
+  };
 
-    QList<Expectation> expectations_;
-    qsizetype nextExpectation_ = 0;
-    bool exactCalls_ = true;
-    bool unexpectedCall_ = false;
+  QList<Expectation> expectations_;
+  qsizetype nextExpectation_ = 0;
+  bool exactCalls_ = true;
+  bool unexpectedCall_ = false;
 };

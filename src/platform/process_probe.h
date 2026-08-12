@@ -8,17 +8,17 @@
 #include <QStringList>
 
 struct ProbeResult {
-    enum class Status {
-        Success,
-        Failed,
-        TimedOut,
-        OutputTooLarge,
-    } status;
-    QByteArray standardOutput;
+  enum class Status {
+    Success,
+    Failed,
+    TimedOut,
+    OutputTooLarge,
+  } status;
+  QByteArray standardOutput;
 };
 
 class ProcessProbe {
 public:
-    virtual ~ProcessProbe() = default;
-    virtual ProbeResult run(const QString &executable, const QStringList &arguments) = 0;
+  virtual ~ProcessProbe() = default;
+  virtual ProbeResult run(const QString &executable, const QStringList &arguments) = 0;
 };

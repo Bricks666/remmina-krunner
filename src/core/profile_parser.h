@@ -10,10 +10,10 @@
 #include <variant>
 
 enum class ProfileParseError {
-    Unreadable,
-    Malformed,
-    MissingName,
+  Unreadable,
+  Malformed,
+  MissingName,
 };
 
-std::variant<ProfileRecord, ProfileParseError> parseRemminaProfile(
-    const QString &sourcePath, const QString &launchPath, QString opaqueId);
+std::variant<ProfileRecord, ProfileParseError> parseRemminaProfile(const QString &sourcePath, const QString &launchPath,
+                                                                   QString opaqueId);

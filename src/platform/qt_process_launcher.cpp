@@ -5,11 +5,10 @@
 
 #include <QProcess>
 
-bool QtProcessLauncher::startDetached(const LaunchRequest &request)
-{
-    QProcess process;
-    process.setProgram(request.program);
-    process.setArguments(request.arguments);
-    process.setProcessEnvironment(request.environment);
-    return process.startDetached();
+bool QtProcessLauncher::startDetached(const LaunchRequest &request) {
+  QProcess process;
+  process.setProgram(request.program);
+  process.setArguments(request.arguments);
+  process.setProcessEnvironment(request.environment);
+  return process.startDetached();
 }

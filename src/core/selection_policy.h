@@ -10,8 +10,8 @@
 #include <QStringView>
 
 struct SelectionDecision {
-    QString selectedId;
-    bool changed;
+  QString selectedId;
+  bool changed;
 };
 
 SelectionDecision validateSelection(const QList<RemminaInstance> &instances, QStringView savedId);

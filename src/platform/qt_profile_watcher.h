@@ -11,17 +11,16 @@
 
 class QtProfileWatcher final : public QObject, public ProfileWatcher {
 public:
-    explicit QtProfileWatcher(QObject *parent = nullptr);
-    ~QtProfileWatcher() override;
+  explicit QtProfileWatcher(QObject *parent = nullptr);
+  ~QtProfileWatcher() override;
 
-    [[nodiscard]] bool replacePaths(const QStringList &paths,
-                                    ChangedCallback callback) override;
-    void clear() override;
+  [[nodiscard]] bool replacePaths(const QStringList &paths, ChangedCallback callback) override;
+  void clear() override;
 
 private:
-    QFileSystemWatcher watcher_;
-    ChangedCallback callback_;
-    QMetaObject::Connection directoryConnection_;
-    QMetaObject::Connection fileConnection_;
-    quint64 generation_ = 0;
+  QFileSystemWatcher watcher_;
+  ChangedCallback callback_;
+  QMetaObject::Connection directoryConnection_;
+  QMetaObject::Connection fileConnection_;
+  quint64 generation_ = 0;
 };

@@ -15,5 +15,5 @@ namespace freedesktop_notifier_detail {
 
 class FreedesktopNotifier final : public Notifier {
 public:
-    void showLaunchFailure() noexcept override;
+  void showLaunchFailure() noexcept override;
 };

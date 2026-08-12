@@ -7,12 +7,12 @@
 #include <QStringList>
 
 struct ProfileRecord {
-    QString opaqueId;
-    QString sourcePath;
-    QString launchPath;
-    QString name;
-    QString server;
-    QStringList labels;
-    QString labelsDisplay;
-    QString protocol;
+  QString opaqueId;
+  QString sourcePath;
+  QString launchPath;
+  QString name;
+  QString server;
+  QStringList labels;
+  QString labelsDisplay;
+  QString protocol;
 };

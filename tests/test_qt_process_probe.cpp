@@ -15,165 +15,141 @@
 
 namespace {
 
-QString readPid(const QString &path)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        return {};
-    }
-    return QString::fromLatin1(file.readAll()).trimmed();
+QString readPid(const QString &path) {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    return {};
+  }
+  return QString::fromLatin1(file.readAll()).trimmed();
 }
 
-void verifyProcessWasReaped(const QString &pidFile)
-{
-    const QString pid = readPid(pidFile);
-    QVERIFY(!pid.isEmpty());
-    QVERIFY(!QFileInfo::exists(QStringLiteral("/proc/") + pid));
+void verifyProcessWasReaped(const QString &pidFile) {
+  const QString pid = readPid(pidFile);
+  QVERIFY(!pid.isEmpty());
+  QVERIFY(!QFileInfo::exists(QStringLiteral("/proc/") + pid));
 }
 
 } // namespace
 
 class QtProcessProbeTest : public QObject {
-    Q_OBJECT
+  Q_OBJECT
 
 private slots:
-    void preservesArgumentsWithoutShellParsing();
-    void rejectsWorkerThreadWithoutSpawning();
-    void discardsStderrWithoutDeadlocking();
-    void classifiesStartExitAndCrashFailures();
-    void killsTimedOutProcesses();
-    void acceptsOutputAtExactLimit();
-    void rejectsFirstBytePastLimitBeforeExit();
-    void capsOversizedStandardOutput();
+  void preservesArgumentsWithoutShellParsing();
+  void rejectsWorkerThreadWithoutSpawning();
+  void discardsStderrWithoutDeadlocking();
+  void classifiesStartExitAndCrashFailures();
+  void killsTimedOutProcesses();
+  void acceptsOutputAtExactLimit();
+  void rejectsFirstBytePastLimitBeforeExit();
+  void capsOversizedStandardOutput();
 };
 
-void QtProcessProbeTest::preservesArgumentsWithoutShellParsing()
-{
+void QtProcessProbeTest::preservesArgumentsWithoutShellParsing() {
+  QtProcessProbe probe;
+  const QString inertArgument = QStringLiteral("path with spaces;$(not-a-command)\nsecond line");
+
+  const ProbeResult result =
+      probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH), {QStringLiteral("echo"), inertArgument});
+
+  QCOMPARE(result.status, ProbeResult::Status::Success);
+  QCOMPARE(result.standardOutput, inertArgument.toUtf8());
+}
+
+void QtProcessProbeTest::rejectsWorkerThreadWithoutSpawning() {
+  QTemporaryDir temporaryDirectory;
+  QVERIFY(temporaryDirectory.isValid());
+  const QString markerPath = QDir(temporaryDirectory.path()).filePath(QStringLiteral("spawned.marker"));
+  ProbeResult workerResult{
+      .status = ProbeResult::Status::Success,
+      .standardOutput = QByteArray("not updated"),
+  };
+  QThread *worker = QThread::create([&workerResult, &markerPath] {
     QtProcessProbe probe;
-    const QString inertArgument = QStringLiteral("path with spaces;$(not-a-command)\nsecond line");
+    workerResult = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH), {QStringLiteral("mark"), markerPath});
+  });
 
-    const ProbeResult result =
-        probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH),
-                  {QStringLiteral("echo"), inertArgument});
+  worker->start();
+  QVERIFY(worker->wait(QtProcessProbe::timeoutMilliseconds + 1000));
+  delete worker;
 
-    QCOMPARE(result.status, ProbeResult::Status::Success);
-    QCOMPARE(result.standardOutput, inertArgument.toUtf8());
+  QCOMPARE(workerResult.status, ProbeResult::Status::Failed);
+  QVERIFY(workerResult.standardOutput.isEmpty());
+  QVERIFY(!QFileInfo::exists(markerPath));
 }
 
-void QtProcessProbeTest::rejectsWorkerThreadWithoutSpawning()
-{
-    QTemporaryDir temporaryDirectory;
-    QVERIFY(temporaryDirectory.isValid());
-    const QString markerPath =
-        QDir(temporaryDirectory.path()).filePath(QStringLiteral("spawned.marker"));
-    ProbeResult workerResult{
-        .status = ProbeResult::Status::Success,
-        .standardOutput = QByteArray("not updated"),
-    };
-    QThread *worker = QThread::create([&workerResult, &markerPath] {
-        QtProcessProbe probe;
-        workerResult = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH),
-                                 {QStringLiteral("mark"), markerPath});
-    });
+void QtProcessProbeTest::discardsStderrWithoutDeadlocking() {
+  QtProcessProbe probe;
 
-    worker->start();
-    QVERIFY(worker->wait(QtProcessProbe::timeoutMilliseconds + 1000));
-    delete worker;
+  const ProbeResult result = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH), {QStringLiteral("stderr-flood")});
 
-    QCOMPARE(workerResult.status, ProbeResult::Status::Failed);
-    QVERIFY(workerResult.standardOutput.isEmpty());
-    QVERIFY(!QFileInfo::exists(markerPath));
+  QCOMPARE(result.status, ProbeResult::Status::Success);
+  QCOMPARE(result.standardOutput, QByteArray("safe stdout"));
 }
 
-void QtProcessProbeTest::discardsStderrWithoutDeadlocking()
-{
-    QtProcessProbe probe;
+void QtProcessProbeTest::classifiesStartExitAndCrashFailures() {
+  QtProcessProbe probe;
+  const QString missingExecutable = QDir(QDir::tempPath()).filePath(QStringLiteral("definitely-missing-process-probe"));
 
-    const ProbeResult result = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH),
-                                         {QStringLiteral("stderr-flood")});
-
-    QCOMPARE(result.status, ProbeResult::Status::Success);
-    QCOMPARE(result.standardOutput, QByteArray("safe stdout"));
+  QCOMPARE(probe.run(missingExecutable, {}).status, ProbeResult::Status::Failed);
+  QCOMPARE(probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH), {QStringLiteral("nonzero")}).status,
+           ProbeResult::Status::Failed);
+  QCOMPARE(probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH), {QStringLiteral("crash")}).status,
+           ProbeResult::Status::Failed);
 }
 
-void QtProcessProbeTest::classifiesStartExitAndCrashFailures()
-{
-    QtProcessProbe probe;
-    const QString missingExecutable =
-        QDir(QDir::tempPath()).filePath(QStringLiteral("definitely-missing-process-probe"));
+void QtProcessProbeTest::killsTimedOutProcesses() {
+  QTemporaryDir temporaryDirectory;
+  QVERIFY(temporaryDirectory.isValid());
+  const QString pidFile = QDir(temporaryDirectory.path()).filePath(QStringLiteral("timeout.pid"));
+  QtProcessProbe probe;
 
-    QCOMPARE(probe.run(missingExecutable, {}).status, ProbeResult::Status::Failed);
-    QCOMPARE(probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH),
-                       {QStringLiteral("nonzero")})
-                 .status,
-             ProbeResult::Status::Failed);
-    QCOMPARE(probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH), {QStringLiteral("crash")})
-                 .status,
-             ProbeResult::Status::Failed);
+  const ProbeResult result = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH), {QStringLiteral("timeout"), pidFile});
+
+  QCOMPARE(result.status, ProbeResult::Status::TimedOut);
+  QVERIFY(result.standardOutput.isEmpty());
+  verifyProcessWasReaped(pidFile);
 }
 
-void QtProcessProbeTest::killsTimedOutProcesses()
-{
-    QTemporaryDir temporaryDirectory;
-    QVERIFY(temporaryDirectory.isValid());
-    const QString pidFile =
-        QDir(temporaryDirectory.path()).filePath(QStringLiteral("timeout.pid"));
-    QtProcessProbe probe;
+void QtProcessProbeTest::acceptsOutputAtExactLimit() {
+  QtProcessProbe probe;
 
-    const ProbeResult result = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH),
-                                         {QStringLiteral("timeout"), pidFile});
+  const ProbeResult result = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH), {QStringLiteral("exact-limit")});
 
-    QCOMPARE(result.status, ProbeResult::Status::TimedOut);
-    QVERIFY(result.standardOutput.isEmpty());
-    verifyProcessWasReaped(pidFile);
+  QCOMPARE(result.status, ProbeResult::Status::Success);
+  QCOMPARE(result.standardOutput.size(), QtProcessProbe::maximumStandardOutputBytes);
 }
 
-void QtProcessProbeTest::acceptsOutputAtExactLimit()
-{
-    QtProcessProbe probe;
+void QtProcessProbeTest::rejectsFirstBytePastLimitBeforeExit() {
+  QtProcessProbe probe;
+  QElapsedTimer elapsed;
+  elapsed.start();
 
-    const ProbeResult result = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH),
-                                         {QStringLiteral("exact-limit")});
+  const ProbeResult result = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH), {QStringLiteral("limit-plus-one")});
 
-    QCOMPARE(result.status, ProbeResult::Status::Success);
-    QCOMPARE(result.standardOutput.size(), QtProcessProbe::maximumStandardOutputBytes);
+  QCOMPARE(result.status, ProbeResult::Status::OutputTooLarge);
+  QVERIFY(result.standardOutput.isEmpty());
+  QVERIFY(elapsed.elapsed() < QtProcessProbe::timeoutMilliseconds);
 }
 
-void QtProcessProbeTest::rejectsFirstBytePastLimitBeforeExit()
-{
-    QtProcessProbe probe;
-    QElapsedTimer elapsed;
-    elapsed.start();
+void QtProcessProbeTest::capsOversizedStandardOutput() {
+  QTemporaryDir temporaryDirectory;
+  QVERIFY(temporaryDirectory.isValid());
+  const QString pidFile = QDir(temporaryDirectory.path()).filePath(QStringLiteral("oversize.pid"));
+  QtProcessProbe probe;
 
-    const ProbeResult result = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH),
-                                         {QStringLiteral("limit-plus-one")});
+  const ProbeResult result =
+      probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH), {QStringLiteral("oversize"), pidFile});
 
-    QCOMPARE(result.status, ProbeResult::Status::OutputTooLarge);
-    QVERIFY(result.standardOutput.isEmpty());
-    QVERIFY(elapsed.elapsed() < QtProcessProbe::timeoutMilliseconds);
+  QCOMPARE(result.status, ProbeResult::Status::OutputTooLarge);
+  QVERIFY(result.standardOutput.size() <= QtProcessProbe::maximumStandardOutputBytes);
+  verifyProcessWasReaped(pidFile);
 }
 
-void QtProcessProbeTest::capsOversizedStandardOutput()
-{
-    QTemporaryDir temporaryDirectory;
-    QVERIFY(temporaryDirectory.isValid());
-    const QString pidFile =
-        QDir(temporaryDirectory.path()).filePath(QStringLiteral("oversize.pid"));
-    QtProcessProbe probe;
-
-    const ProbeResult result = probe.run(QStringLiteral(PROCESS_PROBE_HELPER_PATH),
-                                         {QStringLiteral("oversize"), pidFile});
-
-    QCOMPARE(result.status, ProbeResult::Status::OutputTooLarge);
-    QVERIFY(result.standardOutput.size() <= QtProcessProbe::maximumStandardOutputBytes);
-    verifyProcessWasReaped(pidFile);
-}
-
-int main(int argc, char **argv)
-{
-    QCoreApplication application(argc, argv);
-    QtProcessProbeTest test;
-    return QTest::qExec(&test, argc, argv);
+int main(int argc, char **argv) {
+  QCoreApplication application(argc, argv);
+  QtProcessProbeTest test;
+  return QTest::qExec(&test, argc, argv);
 }
 
 #include "test_qt_process_probe.moc"

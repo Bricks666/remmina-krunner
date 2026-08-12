@@ -8,13 +8,13 @@
 #include <QStringList>
 
 struct LaunchRequest {
-    QString program;
-    QStringList arguments;
-    QProcessEnvironment environment;
+  QString program;
+  QStringList arguments;
+  QProcessEnvironment environment;
 };
 
 class ProcessLauncher {
 public:
-    virtual ~ProcessLauncher() = default;
-    virtual bool startDetached(const LaunchRequest &request) = 0;
+  virtual ~ProcessLauncher() = default;
+  virtual bool startDetached(const LaunchRequest &request) = 0;
 };

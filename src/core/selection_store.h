@@ -8,7 +8,7 @@
 
 class SelectionStore {
 public:
-    virtual ~SelectionStore() = default;
-    [[nodiscard]] virtual QString selectedId() const = 0;
-    virtual bool writeSelectedId(QStringView id) = 0;
+  virtual ~SelectionStore() = default;
+  [[nodiscard]] virtual QString selectedId() const = 0;
+  virtual bool writeSelectedId(QStringView id) = 0;
 };

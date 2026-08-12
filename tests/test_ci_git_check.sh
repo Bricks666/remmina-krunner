@@ -107,6 +107,27 @@ printf '%s\n' range-clean >"${repository}/fixture.txt"
 "${git_executable}" -C "${repository}" commit -qam "clean range"
 CI=true CI_DIFF_BASE="${base_commit}" "${git_check}" "${repository}"
 
+printf '%s\n' 'int  committed=0;' >>"${repository}/legacy.cpp"
+"${git_executable}" -C "${repository}" commit -qam "bad committed formatting"
+committed_format_diagnostic=${test_directory}/committed-format-diagnostic.txt
+if CI=true CI_DIFF_BASE="${base_commit}" \
+    "${git_check}" "${repository}" >/dev/null 2>"${committed_format_diagnostic}"; then
+    echo "Committed-range C++ formatting errors were not detected" >&2
+    exit 1
+fi
+if ! grep -Fq "C++ formatting differs in committed CI range:" \
+    "${committed_format_diagnostic}"; then
+    echo "Committed-range C++ formatting failure was misdiagnosed" >&2
+    exit 1
+fi
+if grep -Fq "Unable to check C++ formatting" "${committed_format_diagnostic}"; then
+    echo "Formatting differences were reported as a formatter execution failure" >&2
+    exit 1
+fi
+printf '%s\n' 'int  legacy=0;' 'int committed = 0;' >"${repository}/legacy.cpp"
+"${git_executable}" -C "${repository}" commit -qam "fix committed formatting"
+CI=true CI_DIFF_BASE="${base_commit}" "${git_check}" "${repository}"
+
 if CI=true env -u CI_DIFF_BASE "${git_check}" "${repository}" >/dev/null 2>&1; then
     echo "CI check accepted a missing CI_DIFF_BASE" >&2
     exit 1

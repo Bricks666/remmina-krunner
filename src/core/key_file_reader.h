@@ -16,16 +16,16 @@ using AllowedValues = QHash<QString, QString>;
 namespace key_file_reader_detail {
 
 enum class ReadError {
-    Unreadable,
-    Malformed,
+  Unreadable,
+  Malformed,
 };
 
 using ReadResult = std::variant<AllowedValues, ReadError>;
 
-ReadResult readAllowedKeyFileValuesWithError(
-    const QString &path, QStringView section, const QSet<QString> &allowedKeys);
+ReadResult readAllowedKeyFileValuesWithError(const QString &path, QStringView section,
+                                             const QSet<QString> &allowedKeys);
 
 } // namespace key_file_reader_detail
 
-std::optional<AllowedValues> readAllowedKeyFileValues(
-    const QString &path, QStringView section, const QSet<QString> &allowedKeys);
+std::optional<AllowedValues> readAllowedKeyFileValues(const QString &path, QStringView section,
+                                                      const QSet<QString> &allowedKeys);

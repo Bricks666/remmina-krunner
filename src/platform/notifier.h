@@ -10,8 +10,8 @@ inline constexpr QLatin1StringView launchFailureBody{"Could not open Remmina."};
 
 class Notifier {
 public:
-    virtual ~Notifier() = default;
-    // Implementations should contain failures. RemminaLauncher also catches an
-    // unexpected exception from third-party/test adapters defensively.
-    virtual void showLaunchFailure() = 0;
+  virtual ~Notifier() = default;
+  // Implementations should contain failures. RemminaLauncher also catches an
+  // unexpected exception from third-party/test adapters defensively.
+  virtual void showLaunchFailure() = 0;
 };

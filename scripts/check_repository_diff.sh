@@ -80,12 +80,16 @@ done
 check_format_diff() {
     local description=$1
     shift
-    local formatted_diff
-    if ! formatted_diff=$(
+    local formatted_diff format_status
+    set +e
+    formatted_diff=$(
         repository_git diff --no-ext-diff --no-color --unified=0 "$@" -- \
             '*.cc' '*.cpp' '*.h' '*.hpp' \
             | (cd -- "${repository_root}" && clang-format-diff -p1 -style=file)
-    ); then
+    )
+    format_status=$?
+    set -e
+    if [[ ${format_status} -gt 1 || (${format_status} -eq 1 && -z ${formatted_diff}) ]]; then
         echo "Unable to check C++ formatting for ${description}" >&2
         exit 1
     fi

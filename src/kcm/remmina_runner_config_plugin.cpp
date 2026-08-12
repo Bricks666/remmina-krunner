@@ -7,17 +7,12 @@
 
 namespace {
 
-QObject *createRemminaRunnerConfig(QWidget *,
-                                   QObject *parent,
-                                   const KPluginMetaData &data,
-                                   const QVariantList &)
-{
-    return new RemminaRunnerConfig(qobject_cast<QWidget *>(parent), data);
+QObject *createRemminaRunnerConfig(QWidget *, QObject *parent, const KPluginMetaData &data, const QVariantList &) {
+  return new RemminaRunnerConfig(qobject_cast<QWidget *>(parent), data);
 }
 
 } // namespace
 
-K_PLUGIN_FACTORY(RemminaRunnerConfigFactory,
-                 registerPlugin<RemminaRunnerConfig>(createRemminaRunnerConfig);)
+K_PLUGIN_FACTORY(RemminaRunnerConfigFactory, registerPlugin<RemminaRunnerConfig>(createRemminaRunnerConfig);)
 
 #include "remmina_runner_config_plugin.moc"

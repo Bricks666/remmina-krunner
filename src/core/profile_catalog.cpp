@@ -14,356 +14,308 @@
 
 namespace {
 
-std::optional<QString> cleanAbsolutePath(const QString &path)
-{
-    if (path.isEmpty() || !QDir::isAbsolutePath(path)) {
-        return std::nullopt;
-    }
-    const QString cleaned = QDir::cleanPath(path);
-    if (cleaned.isEmpty() || !QDir::isAbsolutePath(cleaned)) {
-        return std::nullopt;
-    }
-    return cleaned;
+std::optional<QString> cleanAbsolutePath(const QString &path) {
+  if (path.isEmpty() || !QDir::isAbsolutePath(path)) {
+    return std::nullopt;
+  }
+  const QString cleaned = QDir::cleanPath(path);
+  if (cleaned.isEmpty() || !QDir::isAbsolutePath(cleaned)) {
+    return std::nullopt;
+  }
+  return cleaned;
 }
 
 std::optional<QStringList> watchPaths(const LocatedProfileDirectory &directory,
                                       const DirectoryFingerprint &directoryFingerprint,
-                                      const QList<FileFingerprint> &fingerprints)
-{
-    const std::optional<QString> cleanDirectory = cleanAbsolutePath(directory.hostPath);
-    if (!cleanDirectory.has_value() || !cleanAbsolutePath(directory.launchPath).has_value()
-        || !cleanAbsolutePath(directoryFingerprint.canonicalPath).has_value()
-        || directoryFingerprint.device == 0 || directoryFingerprint.inode == 0) {
-        return std::nullopt;
-    }
+                                      const QList<FileFingerprint> &fingerprints) {
+  const std::optional<QString> cleanDirectory = cleanAbsolutePath(directory.hostPath);
+  if (!cleanDirectory.has_value() || !cleanAbsolutePath(directory.launchPath).has_value() ||
+      !cleanAbsolutePath(directoryFingerprint.canonicalPath).has_value() || directoryFingerprint.device == 0 ||
+      directoryFingerprint.inode == 0) {
+    return std::nullopt;
+  }
 
-    QSet<QString> seenPaths{*cleanDirectory};
-    QStringList parents;
-    parents.reserve(directoryFingerprint.symlinkParentPaths.size());
-    for (const QString &parentPath : directoryFingerprint.symlinkParentPaths) {
-        const std::optional<QString> cleanPath = cleanAbsolutePath(parentPath);
-        if (!cleanPath.has_value()) {
-            return std::nullopt;
-        }
-        if (!seenPaths.contains(*cleanPath)) {
-            seenPaths.insert(*cleanPath);
-            parents.append(*cleanPath);
-        }
+  QSet<QString> seenPaths{*cleanDirectory};
+  QStringList parents;
+  parents.reserve(directoryFingerprint.symlinkParentPaths.size());
+  for (const QString &parentPath : directoryFingerprint.symlinkParentPaths) {
+    const std::optional<QString> cleanPath = cleanAbsolutePath(parentPath);
+    if (!cleanPath.has_value()) {
+      return std::nullopt;
     }
-    std::sort(parents.begin(), parents.end(), [](const QString &left, const QString &right) {
-        return QString::compare(left, right, Qt::CaseSensitive) < 0;
-    });
-
-    QStringList files;
-    files.reserve(fingerprints.size());
-    for (const FileFingerprint &fingerprint : fingerprints) {
-        const std::optional<QString> cleanPath = cleanAbsolutePath(fingerprint.path);
-        if (!cleanPath.has_value()) {
-            return std::nullopt;
-        }
-        if (!seenPaths.contains(*cleanPath)) {
-            seenPaths.insert(*cleanPath);
-            files.append(*cleanPath);
-        }
+    if (!seenPaths.contains(*cleanPath)) {
+      seenPaths.insert(*cleanPath);
+      parents.append(*cleanPath);
     }
-    std::sort(files.begin(), files.end(), [](const QString &left, const QString &right) {
-        return QString::compare(left, right, Qt::CaseSensitive) < 0;
-    });
+  }
+  std::sort(parents.begin(), parents.end(), [](const QString &left, const QString &right) {
+    return QString::compare(left, right, Qt::CaseSensitive) < 0;
+  });
 
-    QStringList paths{*cleanDirectory};
-    paths.append(parents);
-    paths.append(files);
-    return paths;
+  QStringList files;
+  files.reserve(fingerprints.size());
+  for (const FileFingerprint &fingerprint : fingerprints) {
+    const std::optional<QString> cleanPath = cleanAbsolutePath(fingerprint.path);
+    if (!cleanPath.has_value()) {
+      return std::nullopt;
+    }
+    if (!seenPaths.contains(*cleanPath)) {
+      seenPaths.insert(*cleanPath);
+      files.append(*cleanPath);
+    }
+  }
+  std::sort(files.begin(), files.end(), [](const QString &left, const QString &right) {
+    return QString::compare(left, right, Qt::CaseSensitive) < 0;
+  });
+
+  QStringList paths{*cleanDirectory};
+  paths.append(parents);
+  paths.append(files);
+  return paths;
 }
 
-bool sameFingerprint(const FileFingerprint &left, const FileFingerprint &right)
-{
-    return left.path == right.path && left.size == right.size
-        && left.modifiedMilliseconds == right.modifiedMilliseconds;
+bool sameFingerprint(const FileFingerprint &left, const FileFingerprint &right) {
+  return left.path == right.path && left.size == right.size && left.modifiedMilliseconds == right.modifiedMilliseconds;
 }
 
-bool sameDirectoryFingerprint(const DirectoryFingerprint &left,
-                              const DirectoryFingerprint &right)
-{
-    return left.canonicalPath == right.canonicalPath && left.device == right.device
-        && left.inode == right.inode
-        && left.symlinkParentPaths == right.symlinkParentPaths;
+bool sameDirectoryFingerprint(const DirectoryFingerprint &left, const DirectoryFingerprint &right) {
+  return left.canonicalPath == right.canonicalPath && left.device == right.device && left.inode == right.inode &&
+         left.symlinkParentPaths == right.symlinkParentPaths;
 }
 
-bool equivalentSnapshot(const ProfileSnapshot &left, const ProfileSnapshot &right)
-{
-    if (left.directory.hostPath != right.directory.hostPath
-        || left.directory.launchPath != right.directory.launchPath
-        || !sameDirectoryFingerprint(left.directoryFingerprint,
-                                     right.directoryFingerprint)
-        || left.fingerprint.size() != right.fingerprint.size()) {
-        return false;
+bool equivalentSnapshot(const ProfileSnapshot &left, const ProfileSnapshot &right) {
+  if (left.directory.hostPath != right.directory.hostPath || left.directory.launchPath != right.directory.launchPath ||
+      !sameDirectoryFingerprint(left.directoryFingerprint, right.directoryFingerprint) ||
+      left.fingerprint.size() != right.fingerprint.size()) {
+    return false;
+  }
+  for (qsizetype index = 0; index < left.fingerprint.size(); ++index) {
+    if (!sameFingerprint(left.fingerprint.at(index), right.fingerprint.at(index))) {
+      return false;
     }
-    for (qsizetype index = 0; index < left.fingerprint.size(); ++index) {
-        if (!sameFingerprint(left.fingerprint.at(index), right.fingerprint.at(index))) {
-            return false;
-        }
-    }
-    return true;
+  }
+  return true;
 }
 
-void sanitizeRecords(ProfileSnapshot &snapshot)
-{
-    QHash<QString, qsizetype> counts;
-    for (const ProfileRecord &record : snapshot.profiles) {
-        if (!record.opaqueId.isEmpty()) {
-            ++counts[record.opaqueId];
-        }
+void sanitizeRecords(ProfileSnapshot &snapshot) {
+  QHash<QString, qsizetype> counts;
+  for (const ProfileRecord &record : snapshot.profiles) {
+    if (!record.opaqueId.isEmpty()) {
+      ++counts[record.opaqueId];
     }
-    QList<ProfileRecord> sanitized;
-    sanitized.reserve(snapshot.profiles.size());
-    for (ProfileRecord &record : snapshot.profiles) {
-        if (!record.opaqueId.isEmpty() && counts.value(record.opaqueId) == 1) {
-            sanitized.append(std::move(record));
-        }
+  }
+  QList<ProfileRecord> sanitized;
+  sanitized.reserve(snapshot.profiles.size());
+  for (ProfileRecord &record : snapshot.profiles) {
+    if (!record.opaqueId.isEmpty() && counts.value(record.opaqueId) == 1) {
+      sanitized.append(std::move(record));
     }
-    snapshot.profiles = std::move(sanitized);
+  }
+  snapshot.profiles = std::move(sanitized);
 }
 
-ProfileCatalogError mapRepositoryError(ProfileRepositoryError error)
-{
-    return error == ProfileRepositoryError::UnreadableDirectory
-        ? ProfileCatalogError::UnreadableDirectory
-        : ProfileCatalogError::NoProfileDirectory;
+ProfileCatalogError mapRepositoryError(ProfileRepositoryError error) {
+  return error == ProfileRepositoryError::UnreadableDirectory ? ProfileCatalogError::UnreadableDirectory
+                                                              : ProfileCatalogError::NoProfileDirectory;
 }
 
 } // namespace
 
 struct ProfileCatalog::CallbackLifetime {
-    ProfileCatalog *catalog = nullptr;
-    bool active = false;
+  ProfileCatalog *catalog = nullptr;
+  bool active = false;
 };
 
 struct ProfileCatalog::RefreshGuard {
-    explicit RefreshGuard(ProfileCatalog &owner)
-        : catalog(owner)
-    {
-    }
+  explicit RefreshGuard(ProfileCatalog &owner) : catalog(owner) {}
 
-    ~RefreshGuard() noexcept
-    {
-        if (!committed) {
-            catalog.abandonRefresh();
-        }
+  ~RefreshGuard() noexcept {
+    if (!committed) {
+      catalog.abandonRefresh();
     }
+  }
 
-    void commit() noexcept
-    {
-        committed = true;
-    }
+  void commit() noexcept { committed = true; }
 
-    ProfileCatalog &catalog;
-    bool committed = false;
+  ProfileCatalog &catalog;
+  bool committed = false;
 };
 
 ProfileCatalog::ProfileCatalog(ProfileRepositorySource &repository, ProfileWatcher &watcher)
-    : repository_(repository)
-    , watcher_(watcher)
-{
+    : repository_(repository), watcher_(watcher) {}
+
+ProfileCatalog::~ProfileCatalog() noexcept {
+  deactivateCallback();
+  clearWatcherNoexcept();
 }
 
-ProfileCatalog::~ProfileCatalog() noexcept
-{
-    deactivateCallback();
-    clearWatcherNoexcept();
-}
-
-CatalogResult ProfileCatalog::records(const RemminaInstance &instance)
-{
-    if (!hasSelectedInstance_) {
-        selectedInstanceId_ = instance.id;
-        hasSelectedInstance_ = true;
-    } else if (selectedInstanceId_ != instance.id) {
-        clearSnapshotAndWatches();
-        selectedInstanceId_ = instance.id;
-        hasSelectedInstance_ = true;
-        sessionActive_ = false;
-        dirty_ = false;
-    }
-
-    if (hasCleanSnapshot_ && sessionActive_ && !dirty_) {
-        return records_;
-    }
-
-    sessionActive_ = true;
-    RefreshGuard refreshGuard(*this);
-    RepositoryLoadResult initialResult = repository_.load(instance);
-    if (const auto *error = std::get_if<ProfileRepositoryError>(&initialResult)) {
-        return repositoryError(*error, instance);
-    }
-
-    ProfileSnapshot candidate = std::get<ProfileSnapshot>(std::move(initialResult));
-    sanitizeRecords(candidate);
-    constexpr int maximumInstallVerifyRounds = 2;
-    for (int round = 0; round < maximumInstallVerifyRounds; ++round) {
-        records_ = candidate.profiles;
-        hasCleanSnapshot_ = false;
-        if (!installWatches(candidate)) {
-            return records_;
-        }
-
-        RepositoryLoadResult verificationResult = repository_.load(instance);
-        if (const auto *error =
-                std::get_if<ProfileRepositoryError>(&verificationResult)) {
-            return repositoryError(*error, instance);
-        }
-        ProfileSnapshot verified =
-            std::get<ProfileSnapshot>(std::move(verificationResult));
-        sanitizeRecords(verified);
-        records_ = verified.profiles;
-        const bool unchanged = equivalentSnapshot(candidate, verified);
-        if (dirty_) {
-            break;
-        }
-        if (unchanged) {
-            installCleanSnapshot(verified);
-            refreshGuard.commit();
-            return records_;
-        }
-        candidate = std::move(verified);
-    }
-
-    deactivateCallback();
-    clearWatcherNoexcept();
-    hasCleanSnapshot_ = false;
-    dirty_ = true;
-    return records_;
-}
-
-std::optional<ProfileRecord> ProfileCatalog::resolve(
-    QStringView expectedInstanceId, QStringView opaqueId) const
-{
-    if (!hasSelectedInstance_ || selectedInstanceId_ != expectedInstanceId || dirty_
-        || !hasCleanSnapshot_
-        || !profile_repository_detail::directoryMatches(
-            cleanDirectory_.hostPath, cleanDirectoryFingerprint_)) {
-        return std::nullopt;
-    }
-    for (const ProfileRecord &record : records_) {
-        if (record.opaqueId == opaqueId) {
-            const QFileInfo currentSource(record.sourcePath);
-            if (!currentSource.exists() || !currentSource.isFile()) {
-                return std::nullopt;
-            }
-            const QString canonicalIdentity = currentSource.canonicalFilePath();
-            if (canonicalIdentity.isEmpty()) {
-                return std::nullopt;
-            }
-            const QString currentId = profile_repository_detail::opaqueProfileId(
-                QStringView(selectedInstanceId_), QStringView(canonicalIdentity));
-            return currentId == record.opaqueId
-                ? std::optional<ProfileRecord>{record}
-                : std::nullopt;
-        }
-    }
-    return std::nullopt;
-}
-
-void ProfileCatalog::markDirty() noexcept
-{
-    dirty_ = true;
-}
-
-void ProfileCatalog::endSession()
-{
-    sessionActive_ = false;
-}
-
-void ProfileCatalog::reset() noexcept
-{
-    clearSnapshotAndWatches();
-    selectedInstanceId_.clear();
-    hasSelectedInstance_ = false;
-    sessionActive_ = false;
-    dirty_ = false;
-}
-
-CatalogResult ProfileCatalog::repositoryError(ProfileRepositoryError error,
-                                              const RemminaInstance &instance)
-{
+CatalogResult ProfileCatalog::records(const RemminaInstance &instance) {
+  if (!hasSelectedInstance_) {
+    selectedInstanceId_ = instance.id;
+    hasSelectedInstance_ = true;
+  } else if (selectedInstanceId_ != instance.id) {
     clearSnapshotAndWatches();
     selectedInstanceId_ = instance.id;
     hasSelectedInstance_ = true;
-    sessionActive_ = true;
-    dirty_ = true;
-    return mapRepositoryError(error);
-}
-
-bool ProfileCatalog::installWatches(const ProfileSnapshot &snapshot)
-{
-    const std::optional<QStringList> paths = watchPaths(
-        snapshot.directory, snapshot.directoryFingerprint, snapshot.fingerprint);
-    if (!paths.has_value()) {
-        deactivateCallback();
-        clearWatcherNoexcept();
-        dirty_ = true;
-        return false;
-    }
-
-    deactivateCallback();
-    callbackLifetime_ = std::make_shared<CallbackLifetime>();
-    callbackLifetime_->catalog = this;
-    callbackLifetime_->active = true;
-    const std::weak_ptr<CallbackLifetime> weakLifetime = callbackLifetime_;
+    sessionActive_ = false;
     dirty_ = false;
-    const bool installed = watcher_.replacePaths(*paths, [weakLifetime] {
-        const std::shared_ptr<CallbackLifetime> lifetime = weakLifetime.lock();
-        if (lifetime && lifetime->active && lifetime->catalog != nullptr) {
-            lifetime->catalog->markDirty();
-        }
-    });
-    if (!installed) {
-        deactivateCallback();
-        dirty_ = true;
-        return false;
-    }
-    return true;
-}
+  }
 
-void ProfileCatalog::installCleanSnapshot(const ProfileSnapshot &snapshot)
-{
-    cleanDirectory_ = snapshot.directory;
-    cleanDirectoryFingerprint_ = snapshot.directoryFingerprint;
-    hasCleanSnapshot_ = true;
-    dirty_ = false;
-}
+  if (hasCleanSnapshot_ && sessionActive_ && !dirty_) {
+    return records_;
+  }
 
-void ProfileCatalog::deactivateCallback() noexcept
-{
-    if (callbackLifetime_) {
-        callbackLifetime_->active = false;
-        callbackLifetime_->catalog = nullptr;
-        callbackLifetime_.reset();
-    }
-}
+  sessionActive_ = true;
+  RefreshGuard refreshGuard(*this);
+  RepositoryLoadResult initialResult = repository_.load(instance);
+  if (const auto *error = std::get_if<ProfileRepositoryError>(&initialResult)) {
+    return repositoryError(*error, instance);
+  }
 
-void ProfileCatalog::abandonRefresh() noexcept
-{
+  ProfileSnapshot candidate = std::get<ProfileSnapshot>(std::move(initialResult));
+  sanitizeRecords(candidate);
+  constexpr int maximumInstallVerifyRounds = 2;
+  for (int round = 0; round < maximumInstallVerifyRounds; ++round) {
+    records_ = candidate.profiles;
     hasCleanSnapshot_ = false;
-    dirty_ = true;
+    if (!installWatches(candidate)) {
+      return records_;
+    }
+
+    RepositoryLoadResult verificationResult = repository_.load(instance);
+    if (const auto *error = std::get_if<ProfileRepositoryError>(&verificationResult)) {
+      return repositoryError(*error, instance);
+    }
+    ProfileSnapshot verified = std::get<ProfileSnapshot>(std::move(verificationResult));
+    sanitizeRecords(verified);
+    records_ = verified.profiles;
+    const bool unchanged = equivalentSnapshot(candidate, verified);
+    if (dirty_) {
+      break;
+    }
+    if (unchanged) {
+      installCleanSnapshot(verified);
+      refreshGuard.commit();
+      return records_;
+    }
+    candidate = std::move(verified);
+  }
+
+  deactivateCallback();
+  clearWatcherNoexcept();
+  hasCleanSnapshot_ = false;
+  dirty_ = true;
+  return records_;
+}
+
+std::optional<ProfileRecord> ProfileCatalog::resolve(QStringView expectedInstanceId, QStringView opaqueId) const {
+  if (!hasSelectedInstance_ || selectedInstanceId_ != expectedInstanceId || dirty_ || !hasCleanSnapshot_ ||
+      !profile_repository_detail::directoryMatches(cleanDirectory_.hostPath, cleanDirectoryFingerprint_)) {
+    return std::nullopt;
+  }
+  for (const ProfileRecord &record : records_) {
+    if (record.opaqueId == opaqueId) {
+      const QFileInfo currentSource(record.sourcePath);
+      if (!currentSource.exists() || !currentSource.isFile()) {
+        return std::nullopt;
+      }
+      const QString canonicalIdentity = currentSource.canonicalFilePath();
+      if (canonicalIdentity.isEmpty()) {
+        return std::nullopt;
+      }
+      const QString currentId =
+          profile_repository_detail::opaqueProfileId(QStringView(selectedInstanceId_), QStringView(canonicalIdentity));
+      return currentId == record.opaqueId ? std::optional<ProfileRecord>{record} : std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
+void ProfileCatalog::markDirty() noexcept { dirty_ = true; }
+
+void ProfileCatalog::endSession() { sessionActive_ = false; }
+
+void ProfileCatalog::reset() noexcept {
+  clearSnapshotAndWatches();
+  selectedInstanceId_.clear();
+  hasSelectedInstance_ = false;
+  sessionActive_ = false;
+  dirty_ = false;
+}
+
+CatalogResult ProfileCatalog::repositoryError(ProfileRepositoryError error, const RemminaInstance &instance) {
+  clearSnapshotAndWatches();
+  selectedInstanceId_ = instance.id;
+  hasSelectedInstance_ = true;
+  sessionActive_ = true;
+  dirty_ = true;
+  return mapRepositoryError(error);
+}
+
+bool ProfileCatalog::installWatches(const ProfileSnapshot &snapshot) {
+  const std::optional<QStringList> paths =
+      watchPaths(snapshot.directory, snapshot.directoryFingerprint, snapshot.fingerprint);
+  if (!paths.has_value()) {
     deactivateCallback();
     clearWatcherNoexcept();
-}
+    dirty_ = true;
+    return false;
+  }
 
-void ProfileCatalog::clearWatcherNoexcept() noexcept
-{
-    try {
-        watcher_.clear();
-    } catch (...) {
+  deactivateCallback();
+  callbackLifetime_ = std::make_shared<CallbackLifetime>();
+  callbackLifetime_->catalog = this;
+  callbackLifetime_->active = true;
+  const std::weak_ptr<CallbackLifetime> weakLifetime = callbackLifetime_;
+  dirty_ = false;
+  const bool installed = watcher_.replacePaths(*paths, [weakLifetime] {
+    const std::shared_ptr<CallbackLifetime> lifetime = weakLifetime.lock();
+    if (lifetime && lifetime->active && lifetime->catalog != nullptr) {
+      lifetime->catalog->markDirty();
     }
+  });
+  if (!installed) {
+    deactivateCallback();
+    dirty_ = true;
+    return false;
+  }
+  return true;
 }
 
-void ProfileCatalog::clearSnapshotAndWatches() noexcept
-{
-    records_.clear();
-    cleanDirectory_ = {};
-    cleanDirectoryFingerprint_ = {};
-    hasCleanSnapshot_ = false;
-    deactivateCallback();
-    clearWatcherNoexcept();
+void ProfileCatalog::installCleanSnapshot(const ProfileSnapshot &snapshot) {
+  cleanDirectory_ = snapshot.directory;
+  cleanDirectoryFingerprint_ = snapshot.directoryFingerprint;
+  hasCleanSnapshot_ = true;
+  dirty_ = false;
+}
+
+void ProfileCatalog::deactivateCallback() noexcept {
+  if (callbackLifetime_) {
+    callbackLifetime_->active = false;
+    callbackLifetime_->catalog = nullptr;
+    callbackLifetime_.reset();
+  }
+}
+
+void ProfileCatalog::abandonRefresh() noexcept {
+  hasCleanSnapshot_ = false;
+  dirty_ = true;
+  deactivateCallback();
+  clearWatcherNoexcept();
+}
+
+void ProfileCatalog::clearWatcherNoexcept() noexcept {
+  try {
+    watcher_.clear();
+  } catch (...) {
+  }
+}
+
+void ProfileCatalog::clearSnapshotAndWatches() noexcept {
+  records_.clear();
+  cleanDirectory_ = {};
+  cleanDirectoryFingerprint_ = {};
+  hasCleanSnapshot_ = false;
+  deactivateCallback();
+  clearWatcherNoexcept();
 }

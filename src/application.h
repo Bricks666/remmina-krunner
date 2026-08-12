@@ -16,15 +16,13 @@ namespace RemminaKRunner {
 // prove that --rescan never constructs or starts D-Bus/profile services.
 class ApplicationBackend {
 public:
-    virtual ~ApplicationBackend() = default;
-    [[nodiscard]] virtual RegistrySnapshot rescanAndRepair() = 0;
-    virtual int startService(QCoreApplication &application) = 0;
+  virtual ~ApplicationBackend() = default;
+  [[nodiscard]] virtual RegistrySnapshot rescanAndRepair() = 0;
+  virtual int startService(QCoreApplication &application) = 0;
 };
 
-[[nodiscard]] int runApplication(QCoreApplication &application,
-                                 const QStringList &arguments,
-                                 ApplicationBackend &backend,
-                                 QTextStream &standardOutput,
+[[nodiscard]] int runApplication(QCoreApplication &application, const QStringList &arguments,
+                                 ApplicationBackend &backend, QTextStream &standardOutput,
                                  QTextStream &standardError) noexcept;
 
 } // namespace RemminaKRunner

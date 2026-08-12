@@ -13,60 +13,56 @@
 namespace RemminaKRunner {
 
 struct RemoteMatch {
-    QString id;
-    QString text;
-    QString iconName;
-    int categoryRelevance = 0;
-    double relevance = 0.0;
-    QVariantMap properties;
+  QString id;
+  QString text;
+  QString iconName;
+  int categoryRelevance = 0;
+  double relevance = 0.0;
+  QVariantMap properties;
 
-    bool operator==(const RemoteMatch &) const = default;
+  bool operator==(const RemoteMatch &) const = default;
 };
 
 using RemoteMatches = QList<RemoteMatch>;
 
 struct RunnerAction {
-    QString id;
-    QString text;
-    QString iconName;
+  QString id;
+  QString text;
+  QString iconName;
 
-    bool operator==(const RunnerAction &) const = default;
+  bool operator==(const RunnerAction &) const = default;
 };
 
 using RunnerActions = QList<RunnerAction>;
 
-inline QDBusArgument &operator<<(QDBusArgument &argument, const RemoteMatch &match)
-{
-    argument.beginStructure();
-    argument << match.id << match.text << match.iconName << match.categoryRelevance
-             << match.relevance << match.properties;
-    argument.endStructure();
-    return argument;
+inline QDBusArgument &operator<<(QDBusArgument &argument, const RemoteMatch &match) {
+  argument.beginStructure();
+  argument << match.id << match.text << match.iconName << match.categoryRelevance << match.relevance
+           << match.properties;
+  argument.endStructure();
+  return argument;
 }
 
-inline const QDBusArgument &operator>>(const QDBusArgument &argument, RemoteMatch &match)
-{
-    argument.beginStructure();
-    argument >> match.id >> match.text >> match.iconName >> match.categoryRelevance
-        >> match.relevance >> match.properties;
-    argument.endStructure();
-    return argument;
+inline const QDBusArgument &operator>>(const QDBusArgument &argument, RemoteMatch &match) {
+  argument.beginStructure();
+  argument >> match.id >> match.text >> match.iconName >> match.categoryRelevance >> match.relevance >>
+      match.properties;
+  argument.endStructure();
+  return argument;
 }
 
-inline QDBusArgument &operator<<(QDBusArgument &argument, const RunnerAction &action)
-{
-    argument.beginStructure();
-    argument << action.id << action.text << action.iconName;
-    argument.endStructure();
-    return argument;
+inline QDBusArgument &operator<<(QDBusArgument &argument, const RunnerAction &action) {
+  argument.beginStructure();
+  argument << action.id << action.text << action.iconName;
+  argument.endStructure();
+  return argument;
 }
 
-inline const QDBusArgument &operator>>(const QDBusArgument &argument, RunnerAction &action)
-{
-    argument.beginStructure();
-    argument >> action.id >> action.text >> action.iconName;
-    argument.endStructure();
-    return argument;
+inline const QDBusArgument &operator>>(const QDBusArgument &argument, RunnerAction &action) {
+  argument.beginStructure();
+  argument >> action.id >> action.text >> action.iconName;
+  argument.endStructure();
+  return argument;
 }
 
 } // namespace RemminaKRunner
@@ -78,20 +74,19 @@ Q_DECLARE_METATYPE(RemminaKRunner::RunnerActions)
 
 namespace RemminaKRunner {
 
-inline void registerDbusTypes()
-{
-    static const bool registered = [] {
-        qRegisterMetaType<RemoteMatch>();
-        qRegisterMetaType<RemoteMatches>();
-        qRegisterMetaType<RunnerAction>();
-        qRegisterMetaType<RunnerActions>();
-        qDBusRegisterMetaType<RemoteMatch>();
-        qDBusRegisterMetaType<RemoteMatches>();
-        qDBusRegisterMetaType<RunnerAction>();
-        qDBusRegisterMetaType<RunnerActions>();
-        return true;
-    }();
-    Q_UNUSED(registered)
+inline void registerDbusTypes() {
+  static const bool registered = [] {
+    qRegisterMetaType<RemoteMatch>();
+    qRegisterMetaType<RemoteMatches>();
+    qRegisterMetaType<RunnerAction>();
+    qRegisterMetaType<RunnerActions>();
+    qDBusRegisterMetaType<RemoteMatch>();
+    qDBusRegisterMetaType<RemoteMatches>();
+    qDBusRegisterMetaType<RunnerAction>();
+    qDBusRegisterMetaType<RunnerActions>();
+    return true;
+  }();
+  Q_UNUSED(registered)
 }
 
 } // namespace RemminaKRunner

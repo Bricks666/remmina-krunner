@@ -9,12 +9,12 @@
 
 class KConfigSelectionStore final : public SelectionStore {
 public:
-    KConfigSelectionStore();
-    explicit KConfigSelectionStore(QString filePath);
+  KConfigSelectionStore();
+  explicit KConfigSelectionStore(QString filePath);
 
-    [[nodiscard]] QString selectedId() const override;
-    bool writeSelectedId(QStringView id) override;
+  [[nodiscard]] QString selectedId() const override;
+  bool writeSelectedId(QStringView id) override;
 
 private:
-    QString configFile_;
+  QString configFile_;
 };

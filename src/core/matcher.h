@@ -10,21 +10,21 @@
 #include <QStringView>
 
 enum class QueryKind {
-    Ignore,
-    Create,
-    Lookup,
+  Ignore,
+  Create,
+  Lookup,
 };
 
 struct ParsedQuery {
-    QueryKind kind;
-    QStringList tokens;
+  QueryKind kind;
+  QStringList tokens;
 };
 
 ParsedQuery parseRunnerQuery(QStringView query);
 
 struct SearchMatch {
-    ProfileRecord record;
-    double relevance;
+  ProfileRecord record;
+  double relevance;
 };
 
 QList<SearchMatch> matchProfiles(const QList<ProfileRecord> &profiles, const QStringList &tokens);
