@@ -4,6 +4,7 @@
 #include <QtTest>
 
 #include "core/profile_catalog.h"
+#include "platform/qt_profile_watcher.h"
 
 #include <QDir>
 #include <QDateTime>
@@ -13,7 +14,12 @@
 
 #include <functional>
 #include <optional>
+#include <stdexcept>
 #include <utility>
+
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace {
 
@@ -123,6 +129,13 @@ public:
     RepositoryLoadResult load(const RemminaInstance &instance) override
     {
         calls.append(instance.id);
+        if (throwOnCalls.contains(calls.size())) {
+            throw std::runtime_error("fake repository failure");
+        }
+        if (throwsRemaining > 0) {
+            --throwsRemaining;
+            throw std::runtime_error("fake repository failure");
+        }
         if (beforeLoad) {
             beforeLoad(instance);
         }
@@ -138,6 +151,8 @@ public:
     QList<RepositoryLoadResult> results;
     QStringList calls;
     std::function<void(const RemminaInstance &)> beforeLoad;
+    int throwsRemaining = 0;
+    QList<int> throwOnCalls;
 
 private:
     qsizetype nextResult_ = 0;
@@ -148,6 +163,13 @@ public:
     bool replacePaths(const QStringList &requestedPaths, ChangedCallback changed) override
     {
         replacements.append(requestedPaths);
+        if (replaceThrowsRemaining > 0) {
+            --replaceThrowsRemaining;
+            paths = requestedPaths;
+            callback = std::move(changed);
+            callbackCapturedBeforeThrow = callback;
+            throw std::runtime_error("fake watcher replacement failure");
+        }
         const bool success = nextResult_ >= replaceResults.size()
             || replaceResults.at(nextResult_++);
         if (callback) {
@@ -172,6 +194,10 @@ public:
     void clear() override
     {
         ++clearCount;
+        if (clearThrowsRemaining > 0) {
+            --clearThrowsRemaining;
+            throw std::runtime_error("fake watcher clear failure");
+        }
         paths.clear();
         callback = {};
     }
@@ -191,6 +217,9 @@ public:
     int clearCount = 0;
     int synchronousChangesRemaining = 0;
     bool invokeRetiredAfterReplace = false;
+    int replaceThrowsRemaining = 0;
+    int clearThrowsRemaining = 0;
+    ChangedCallback callbackCapturedBeforeThrow;
 
 private:
     qsizetype nextResult_ = 0;
@@ -263,6 +292,13 @@ private slots:
     void removesEmptyAndEveryDuplicateOpaqueId();
     void resolveRejectsRemovedAndRetargetedSourceWithoutLoading();
     void resolveRejectsRetargetedDirectoryWithoutLoading();
+    void initialRepositoryExceptionLeavesRefreshRetryable();
+    void repositoryExceptionAfterCleanSnapshotInvalidatesIt();
+    void watcherExceptionsLeaveCapturedCallbackInertAndRetryable();
+    void resetAndDestructorContainWatcherClearExceptions();
+    void nestedSymlinkRetargetRefreshesActiveSession_data();
+    void nestedSymlinkRetargetRefreshesActiveSession();
+    void resolveRejectsDirectoryAndFifoReplacementsWithoutLoading();
 };
 
 void ProfileCatalogTest::constructorIsLazyAndDestructorClearsWatcher()
@@ -854,6 +890,245 @@ void ProfileCatalogTest::resolveRejectsRetargetedDirectoryWithoutLoading()
     QVERIFY(QFile::link(QDir(root).filePath(QStringLiteral("43")), current));
     QVERIFY(catalog.resolve(QStringView(opaqueId)) == nullptr);
     QCOMPARE(repository.calls.size(), 2);
+}
+
+void ProfileCatalogTest::initialRepositoryExceptionLeavesRefreshRetryable()
+{
+    FakeRepository repository;
+    repository.results = {makeSnapshot(
+        {makeRecord(QStringLiteral("recovered"))}, located(QStringLiteral("/profiles/one")))};
+    repository.throwsRemaining = 1;
+    FakeWatcher watcher;
+    ProfileCatalog catalog(repository, watcher);
+    const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+
+    bool threw = false;
+    try {
+        const CatalogResult ignored = catalog.records(instance);
+        Q_UNUSED(ignored);
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+
+    QVERIFY(threw);
+    QCOMPARE(repository.calls.size(), 1);
+    QVERIFY(catalog.resolve(u"recovered") == nullptr);
+    const QList<ProfileRecord> recovered = requireRecords(catalog.records(instance));
+    QCOMPARE(recovered.size(), 1);
+    QCOMPARE(recovered.constFirst().opaqueId, QStringLiteral("recovered"));
+    QCOMPARE(repository.calls.size(), 3);
+}
+
+void ProfileCatalogTest::repositoryExceptionAfterCleanSnapshotInvalidatesIt()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString directory = QDir(temporary.path()).filePath(QStringLiteral("profiles"));
+    const QString source =
+        writeBytes(QDir(directory).filePath(QStringLiteral("profile.remmina")));
+    const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+    const ProfileSnapshot snapshot = resolvableSnapshot(instance.id, directory, source);
+    FakeRepository repository;
+    repository.results = {snapshot};
+    FakeWatcher watcher;
+    ProfileCatalog catalog(repository, watcher);
+    const QList<ProfileRecord> initial = requireRecords(catalog.records(instance));
+    const QString opaqueId = initial.constFirst().opaqueId;
+    QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+    catalog.endSession();
+    repository.throwOnCalls = {4};
+
+    bool threw = false;
+    try {
+        const CatalogResult ignored = catalog.records(instance);
+        Q_UNUSED(ignored);
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+
+    QVERIFY(threw);
+    QCOMPARE(repository.calls.size(), 4);
+    QVERIFY(catalog.resolve(QStringView(opaqueId)) == nullptr);
+    requireRecords(catalog.records(instance));
+    QCOMPARE(repository.calls.size(), 6);
+    QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+}
+
+void ProfileCatalogTest::watcherExceptionsLeaveCapturedCallbackInertAndRetryable()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString directory = QDir(temporary.path()).filePath(QStringLiteral("profiles"));
+    const QString source =
+        writeBytes(QDir(directory).filePath(QStringLiteral("profile.remmina")));
+    const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+    FakeRepository repository;
+    repository.results = {resolvableSnapshot(instance.id, directory, source)};
+    FakeWatcher watcher;
+    watcher.replaceThrowsRemaining = 1;
+    watcher.clearThrowsRemaining = 1;
+    ProfileCatalog catalog(repository, watcher);
+
+    bool threw = false;
+    try {
+        const CatalogResult ignored = catalog.records(instance);
+        Q_UNUSED(ignored);
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    const int clearCallsAfterThrow = watcher.clearCount;
+    const ProfileWatcher::ChangedCallback stale = watcher.callbackCapturedBeforeThrow;
+    watcher.clearThrowsRemaining = 0;
+
+    QVERIFY(threw);
+    QCOMPARE(clearCallsAfterThrow, 1);
+    QVERIFY(stale);
+    QVERIFY(catalog.resolve(u"anything") == nullptr);
+    const QList<ProfileRecord> recovered = requireRecords(catalog.records(instance));
+    const QString opaqueId = recovered.constFirst().opaqueId;
+    QCOMPARE(repository.calls.size(), 3);
+    QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+
+    stale();
+    requireRecords(catalog.records(instance));
+    QCOMPARE(repository.calls.size(), 3);
+    QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+}
+
+void ProfileCatalogTest::resetAndDestructorContainWatcherClearExceptions()
+{
+    FakeRepository repository;
+    repository.results = {makeSnapshot(
+        {makeRecord(QStringLiteral("record"))}, located(QStringLiteral("/profiles/one")))};
+    FakeWatcher watcher;
+    ProfileCatalog catalog(repository, watcher);
+    const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+    requireRecords(catalog.records(instance));
+    watcher.clearThrowsRemaining = 1;
+
+    bool resetThrew = false;
+    try {
+        catalog.reset();
+    } catch (const std::runtime_error &) {
+        resetThrew = true;
+    }
+    watcher.clearThrowsRemaining = 0;
+
+    QVERIFY(!resetThrew);
+    QVERIFY(catalog.resolve(u"record") == nullptr);
+    QCOMPARE(repository.calls.size(), 2);
+
+    const pid_t child = ::fork();
+    QVERIFY(child >= 0);
+    if (child == 0) {
+        FakeRepository childRepository;
+        FakeWatcher childWatcher;
+        {
+            ProfileCatalog childCatalog(childRepository, childWatcher);
+            childWatcher.clearThrowsRemaining = 1;
+        }
+        ::_exit(0);
+    }
+    int status = 0;
+    QVERIFY(::waitpid(child, &status, 0) == child);
+    QVERIFY(WIFEXITED(status));
+    QCOMPARE(WEXITSTATUS(status), 0);
+}
+
+void ProfileCatalogTest::nestedSymlinkRetargetRefreshesActiveSession_data()
+{
+    QTest::addColumn<bool>("relativeTargets");
+    QTest::newRow("absolute-targets") << false;
+    QTest::newRow("relative-targets") << true;
+}
+
+void ProfileCatalogTest::nestedSymlinkRetargetRefreshesActiveSession()
+{
+    QFETCH(bool, relativeTargets);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString lexicalParent =
+        QDir(temporary.path()).filePath(QStringLiteral("lexical"));
+    const QString nestedParent = QDir(temporary.path()).filePath(QStringLiteral("x"));
+    const QString firstTarget =
+        QDir(temporary.path()).filePath(QStringLiteral("target-a"));
+    const QString secondTarget =
+        QDir(temporary.path()).filePath(QStringLiteral("target-b"));
+    QVERIFY(QDir().mkpath(lexicalParent));
+    QVERIFY(QDir().mkpath(nestedParent));
+    const QString firstDirectory =
+        QDir(firstTarget).filePath(QStringLiteral("data/remmina"));
+    const QString secondDirectory =
+        QDir(secondTarget).filePath(QStringLiteral("data/remmina"));
+    writeBytes(QDir(firstDirectory).filePath(QStringLiteral("profile.remmina")),
+               QByteArray("[remmina]\nname=First\nserver=first.example.test\n"));
+    writeBytes(QDir(secondDirectory).filePath(QStringLiteral("profile.remmina")),
+               QByteArray("[remmina]\nname=Second\nserver=second.example.test\n"));
+    const QString nestedLink = QDir(nestedParent).filePath(QStringLiteral("next"));
+    const QString firstLinkTarget =
+        relativeTargets ? QStringLiteral("../target-a") : firstTarget;
+    QVERIFY(QFile::link(firstLinkTarget, nestedLink));
+    const QString current = QDir(lexicalParent).filePath(QStringLiteral("current"));
+    const QString currentTarget = relativeTargets
+        ? QStringLiteral("../x/next/data")
+        : QDir(nestedLink).filePath(QStringLiteral("data"));
+    QVERIFY(QFile::link(currentTarget, current));
+
+    RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+    instance.profiles.configHome =
+        QDir(temporary.path()).filePath(QStringLiteral("config"));
+    instance.profiles.dataHome = current;
+    instance.profiles.legacyHome =
+        QDir(temporary.path()).filePath(QStringLiteral("legacy"));
+    ProfileRepository repository;
+    QtProfileWatcher watcher;
+    ProfileCatalog catalog(repository, watcher);
+
+    const QList<ProfileRecord> initial = requireRecords(catalog.records(instance));
+    QCOMPARE(initial.size(), 1);
+    QCOMPARE(initial.constFirst().name, QStringLiteral("First"));
+
+    QVERIFY(QFile::remove(nestedLink));
+    const QString secondLinkTarget =
+        relativeTargets ? QStringLiteral("../target-b") : secondTarget;
+    QVERIFY(QFile::link(secondLinkTarget, nestedLink));
+
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+        const CatalogResult result = catalog.records(instance);
+        const auto *records = std::get_if<QList<ProfileRecord>>(&result);
+        return records != nullptr && records->size() == 1
+            && records->constFirst().name == QStringLiteral("Second");
+    })(), 5000);
+}
+
+void ProfileCatalogTest::resolveRejectsDirectoryAndFifoReplacementsWithoutLoading()
+{
+    for (const bool replaceWithFifo : {false, true}) {
+        QTemporaryDir temporary;
+        QVERIFY(temporary.isValid());
+        const QString directory =
+            QDir(temporary.path()).filePath(QStringLiteral("profiles"));
+        const QString source =
+            writeBytes(QDir(directory).filePath(QStringLiteral("profile.remmina")));
+        const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+        FakeRepository repository;
+        repository.results = {resolvableSnapshot(instance.id, directory, source)};
+        FakeWatcher watcher;
+        ProfileCatalog catalog(repository, watcher);
+        const QList<ProfileRecord> loaded = requireRecords(catalog.records(instance));
+        const QString opaqueId = loaded.constFirst().opaqueId;
+        QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+        QVERIFY(QFile::remove(source));
+        if (replaceWithFifo) {
+            const QByteArray encoded = QFile::encodeName(source);
+            QVERIFY(::mkfifo(encoded.constData(), 0600) == 0);
+        } else {
+            QVERIFY(QDir().mkpath(source));
+        }
+
+        QVERIFY(catalog.resolve(QStringView(opaqueId)) == nullptr);
+        QCOMPARE(repository.calls.size(), 2);
+    }
 }
 
 QTEST_GUILESS_MAIN(ProfileCatalogTest)

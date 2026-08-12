@@ -158,6 +158,10 @@ private slots:
     void defaultParserLoadsValidAndSkipsMalformedProfiles();
     void returnsEmptySnapshotForReadableEmptyDirectory();
     void capturesSnapDirectoryIdentityAndSymlinkParent();
+    void capturesNestedSymlinkParents_data();
+    void capturesNestedSymlinkParents();
+    void enforcesSymlinkTraversalLimit_data();
+    void enforcesSymlinkTraversalLimit();
     void transientUnreadableParseErrorRetriesWithoutFingerprintChange();
     void equalSizeReplacementWithSamePublicMtimeReparses();
     void parserMutationCannotPoisonCacheOrOpaqueIdentity();
@@ -338,6 +342,98 @@ void ProfileRepositoryTest::capturesSnapDirectoryIdentityAndSymlinkParent()
     QVERIFY(snapshot.directoryFingerprint.symlinkParentPaths.contains(snapRoot));
     QVERIFY(profile_repository_detail::directoryMatches(
         snapshot.directory.hostPath, snapshot.directoryFingerprint));
+}
+
+void ProfileRepositoryTest::capturesNestedSymlinkParents_data()
+{
+    QTest::addColumn<bool>("relativeTargets");
+    QTest::newRow("absolute-targets") << false;
+    QTest::newRow("relative-targets") << true;
+}
+
+void ProfileRepositoryTest::capturesNestedSymlinkParents()
+{
+    QFETCH(bool, relativeTargets);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString lexicalParent =
+        makeDirectory(QDir(temporary.path()).filePath(QStringLiteral("lexical")));
+    const QString nestedParent =
+        makeDirectory(QDir(temporary.path()).filePath(QStringLiteral("x")));
+    const QString target =
+        makeDirectory(QDir(temporary.path()).filePath(QStringLiteral("target-a")));
+    const QString directory =
+        makeDirectory(QDir(target).filePath(QStringLiteral("data/remmina")));
+    writeProfile(directory, u"nested.remmina");
+    const QString nestedLink = QDir(nestedParent).filePath(QStringLiteral("next"));
+    const QString nestedTarget =
+        relativeTargets ? QStringLiteral("./../target-a") : target;
+    QVERIFY(QFile::link(nestedTarget, nestedLink));
+    const QString current = QDir(lexicalParent).filePath(QStringLiteral("current"));
+    const QString currentTarget = relativeTargets
+        ? QStringLiteral("./../x/./next/data")
+        : QDir(nestedLink).filePath(QStringLiteral("data"));
+    QVERIFY(QFile::link(currentTarget, current));
+    RemminaInstance instance = nativeInstance(temporary.path());
+    instance.profiles.dataHome = current;
+    instance.profiles.legacyHome =
+        QDir(temporary.path()).filePath(QStringLiteral("missing-legacy"));
+
+    ProfileRepository repository;
+    const ProfileSnapshot snapshot = snapshotFrom(repository.load(instance));
+
+    QCOMPARE(snapshot.directory.hostPath,
+             QDir(current).filePath(QStringLiteral("remmina")));
+    QCOMPARE(snapshot.directoryFingerprint.symlinkParentPaths,
+             QStringList({lexicalParent, nestedParent}));
+    QVERIFY(profile_repository_detail::directoryMatches(
+        snapshot.directory.hostPath, snapshot.directoryFingerprint));
+}
+
+void ProfileRepositoryTest::enforcesSymlinkTraversalLimit_data()
+{
+    QTest::addColumn<int>("linkCount");
+    QTest::addColumn<bool>("expectSnapshot");
+    QTest::newRow("forty-links") << 40 << true;
+    QTest::newRow("forty-one-links") << 41 << false;
+}
+
+void ProfileRepositoryTest::enforcesSymlinkTraversalLimit()
+{
+    QFETCH(int, linkCount);
+    QFETCH(bool, expectSnapshot);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString terminal =
+        makeDirectory(QDir(temporary.path()).filePath(QStringLiteral("terminal")));
+    const QString profilePath = makeDirectory(
+        QDir(terminal).filePath(QStringLiteral("remmina")));
+    writeProfile(profilePath, u"bounded.remmina");
+    QString target = terminal;
+    QStringList expectedParents;
+    for (int index = linkCount - 1; index >= 0; --index) {
+        const QString parent = makeDirectory(
+            QDir(temporary.path()).filePath(QStringLiteral("link-%1").arg(index)));
+        const QString link = QDir(parent).filePath(QStringLiteral("next"));
+        QVERIFY(QFile::link(target, link));
+        expectedParents.prepend(parent);
+        target = link;
+    }
+    RemminaInstance instance = nativeInstance(temporary.path());
+    instance.profiles.dataHome = target;
+    instance.profiles.legacyHome =
+        QDir(temporary.path()).filePath(QStringLiteral("missing-legacy"));
+    ProfileRepository repository;
+
+    const RepositoryLoadResult result = repository.load(instance);
+
+    QCOMPARE(std::holds_alternative<ProfileSnapshot>(result), expectSnapshot);
+    if (expectSnapshot) {
+        const ProfileSnapshot snapshot = std::get<ProfileSnapshot>(result);
+        QCOMPARE(snapshot.directoryFingerprint.symlinkParentPaths, expectedParents);
+    } else {
+        QVERIFY(std::holds_alternative<ProfileRepositoryError>(result));
+    }
 }
 
 void ProfileRepositoryTest::equalSizeReplacementWithSamePublicMtimeReparses()

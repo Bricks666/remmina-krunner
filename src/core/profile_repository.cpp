@@ -169,29 +169,82 @@ QString canonicalIdentityForDescriptor(int descriptor)
     return QDir::cleanPath(identity);
 }
 
-QStringList symlinkParentPaths(const QString &lexicalPath)
+std::optional<QStringList> symlinkParentPaths(const QString &lexicalPath)
 {
     const QString cleaned = QDir::cleanPath(lexicalPath);
     if (cleaned.isEmpty() || !QDir::isAbsolutePath(cleaned)) {
-        return {};
+        return std::nullopt;
     }
 
     QStringList parents;
+    QSet<QString> seenParents;
     QString current = QStringLiteral("/");
-    const QStringList components = cleaned.split(QLatin1Char('/'), Qt::SkipEmptyParts);
-    for (const QString &component : components) {
-        const QString parent = current;
-        current = cleanChildPath(current, component);
-        QByteArray encodedPath = QFile::encodeName(current);
+    QStringList pending = cleaned.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    constexpr int maximumSymbolicLinks = 40;
+    int followedLinks = 0;
+    while (!pending.isEmpty()) {
+        const QString component = pending.takeFirst();
+        if (component.isEmpty() || component == QStringLiteral(".")) {
+            continue;
+        }
+        if (component == QStringLiteral("..")) {
+            current = QFileInfo(current).absolutePath();
+            continue;
+        }
+
+        const QString candidate = cleanChildPath(current, component);
+        QByteArray encodedPath = QFile::encodeName(candidate);
         struct stat metadata {};
         int result = -1;
         do {
             result = ::lstat(encodedPath.constData(), &metadata);
         } while (result < 0 && errno == EINTR);
-        encodedPath.fill('\0');
-        if (result == 0 && S_ISLNK(metadata.st_mode)) {
-            parents.append(QDir::cleanPath(parent));
+        if (result < 0) {
+            encodedPath.fill('\0');
+            return std::nullopt;
         }
+        if (!S_ISLNK(metadata.st_mode)) {
+            encodedPath.fill('\0');
+            current = candidate;
+            continue;
+        }
+        if (followedLinks == maximumSymbolicLinks) {
+            encodedPath.fill('\0');
+            return std::nullopt;
+        }
+
+        QByteArray encodedTarget(4096, Qt::Uninitialized);
+        ssize_t targetLength = -1;
+        do {
+            targetLength = ::readlink(encodedPath.constData(),
+                                      encodedTarget.data(),
+                                      encodedTarget.size());
+        } while (targetLength < 0 && errno == EINTR);
+        encodedPath.fill('\0');
+        if (targetLength <= 0 || targetLength == encodedTarget.size()) {
+            encodedTarget.fill('\0');
+            return std::nullopt;
+        }
+        encodedTarget.truncate(static_cast<qsizetype>(targetLength));
+        const QString target = QFile::decodeName(encodedTarget);
+        if (target.isEmpty() || QFile::encodeName(target) != encodedTarget) {
+            encodedTarget.fill('\0');
+            return std::nullopt;
+        }
+        encodedTarget.fill('\0');
+
+        if (!seenParents.contains(current)) {
+            seenParents.insert(current);
+            parents.append(current);
+        }
+        QStringList targetComponents =
+            target.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        targetComponents.append(pending);
+        pending = std::move(targetComponents);
+        if (QDir::isAbsolutePath(target)) {
+            current = QStringLiteral("/");
+        }
+        ++followedLinks;
     }
     return parents;
 }
@@ -211,11 +264,15 @@ std::optional<DirectoryFingerprint> fingerprintForDescriptor(int descriptor,
     if (canonicalPath.isEmpty()) {
         return std::nullopt;
     }
+    const std::optional<QStringList> symlinkParents = symlinkParentPaths(lexicalPath);
+    if (!symlinkParents.has_value()) {
+        return std::nullopt;
+    }
     return DirectoryFingerprint{
         .canonicalPath = canonicalPath,
         .device = static_cast<quint64>(metadata.st_dev),
         .inode = static_cast<quint64>(metadata.st_ino),
-        .symlinkParentPaths = symlinkParentPaths(lexicalPath),
+        .symlinkParentPaths = *symlinkParents,
     };
 }
 

@@ -119,6 +119,8 @@ void QtProfileWatcherTest::replaceAndClearSuppressOldCallbacks()
     QVERIFY(watcher.replacePaths({newDirectory.path(), newProfile},
                                  [&] { ++newCallbacks; }));
     appendByte(oldProfile);
+    // Deterministic stale-generation behavior is covered by the catalog fake-watcher
+    // tests; these bounded waits are only adapter-level filesystem smoke coverage.
     QTest::qWait(250);
     QCOMPARE(oldCallbacks, 0);
     QCOMPARE(newCallbacks, 0);

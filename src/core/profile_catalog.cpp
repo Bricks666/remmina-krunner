@@ -139,16 +139,38 @@ struct ProfileCatalog::CallbackLifetime {
     bool active = false;
 };
 
+struct ProfileCatalog::RefreshGuard {
+    explicit RefreshGuard(ProfileCatalog &owner)
+        : catalog(owner)
+    {
+    }
+
+    ~RefreshGuard() noexcept
+    {
+        if (!committed) {
+            catalog.abandonRefresh();
+        }
+    }
+
+    void commit() noexcept
+    {
+        committed = true;
+    }
+
+    ProfileCatalog &catalog;
+    bool committed = false;
+};
+
 ProfileCatalog::ProfileCatalog(ProfileRepositorySource &repository, ProfileWatcher &watcher)
     : repository_(repository)
     , watcher_(watcher)
 {
 }
 
-ProfileCatalog::~ProfileCatalog()
+ProfileCatalog::~ProfileCatalog() noexcept
 {
     deactivateCallback();
-    watcher_.clear();
+    clearWatcherNoexcept();
 }
 
 CatalogResult ProfileCatalog::records(const RemminaInstance &instance)
@@ -164,11 +186,12 @@ CatalogResult ProfileCatalog::records(const RemminaInstance &instance)
         dirty_ = false;
     }
 
-    if (sessionActive_ && !dirty_) {
+    if (hasCleanSnapshot_ && sessionActive_ && !dirty_) {
         return records_;
     }
 
     sessionActive_ = true;
+    RefreshGuard refreshGuard(*this);
     RepositoryLoadResult initialResult = repository_.load(instance);
     if (const auto *error = std::get_if<ProfileRepositoryError>(&initialResult)) {
         return repositoryError(*error, instance);
@@ -199,13 +222,14 @@ CatalogResult ProfileCatalog::records(const RemminaInstance &instance)
         }
         if (unchanged) {
             installCleanSnapshot(verified);
+            refreshGuard.commit();
             return records_;
         }
         candidate = std::move(verified);
     }
 
     deactivateCallback();
-    watcher_.clear();
+    clearWatcherNoexcept();
     hasCleanSnapshot_ = false;
     dirty_ = true;
     return records_;
@@ -220,7 +244,11 @@ const ProfileRecord *ProfileCatalog::resolve(QStringView opaqueId) const
     }
     for (const ProfileRecord &record : records_) {
         if (record.opaqueId == opaqueId) {
-            const QString canonicalIdentity = QFileInfo(record.sourcePath).canonicalFilePath();
+            const QFileInfo currentSource(record.sourcePath);
+            if (!currentSource.exists() || !currentSource.isFile()) {
+                return nullptr;
+            }
+            const QString canonicalIdentity = currentSource.canonicalFilePath();
             if (canonicalIdentity.isEmpty()) {
                 return nullptr;
             }
@@ -242,7 +270,7 @@ void ProfileCatalog::endSession()
     sessionActive_ = false;
 }
 
-void ProfileCatalog::reset()
+void ProfileCatalog::reset() noexcept
 {
     clearSnapshotAndWatches();
     selectedInstanceId_.clear();
@@ -268,7 +296,7 @@ bool ProfileCatalog::installWatches(const ProfileSnapshot &snapshot)
         snapshot.directory, snapshot.directoryFingerprint, snapshot.fingerprint);
     if (!paths.has_value()) {
         deactivateCallback();
-        watcher_.clear();
+        clearWatcherNoexcept();
         dirty_ = true;
         return false;
     }
@@ -310,12 +338,28 @@ void ProfileCatalog::deactivateCallback() noexcept
     }
 }
 
-void ProfileCatalog::clearSnapshotAndWatches()
+void ProfileCatalog::abandonRefresh() noexcept
+{
+    hasCleanSnapshot_ = false;
+    dirty_ = true;
+    deactivateCallback();
+    clearWatcherNoexcept();
+}
+
+void ProfileCatalog::clearWatcherNoexcept() noexcept
+{
+    try {
+        watcher_.clear();
+    } catch (...) {
+    }
+}
+
+void ProfileCatalog::clearSnapshotAndWatches() noexcept
 {
     records_.clear();
     cleanDirectory_ = {};
     cleanDirectoryFingerprint_ = {};
     hasCleanSnapshot_ = false;
     deactivateCallback();
-    watcher_.clear();
+    clearWatcherNoexcept();
 }
