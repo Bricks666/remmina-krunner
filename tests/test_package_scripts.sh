@@ -48,9 +48,23 @@ helper_log=${root}/runner-calls
 mkdir -p -- "${fake_bin}"
 : >"${calls}"
 : >"${helper_log}"
-for tool in find install mkdir mktemp readlink rm sleep sort stat; do
+for tool in find install mktemp readlink rm sleep sort stat; do
     ln -s "/usr/bin/${tool}" "${fake_bin}/${tool}"
 done
+cat >"${fake_bin}/mkdir" <<'EOF'
+#!/usr/bin/bash
+if [[ -n ${FAKE_MKDIR_RACE_PATH:-} && ! -e ${FAKE_MKDIR_RACE_MARKER:?} ]]; then
+    for argument in "$@"; do
+        if [[ ${argument} == "${FAKE_MKDIR_RACE_PATH}" ||
+              ${argument} == "${FAKE_MKDIR_RACE_PATH}"/* ]]; then
+            /usr/bin/mkdir -m 0700 -- "${FAKE_MKDIR_RACE_PATH}"
+            printf 'created externally\n' >"${FAKE_MKDIR_RACE_MARKER}"
+            break
+        fi
+    done
+fi
+exec /usr/bin/mkdir "$@"
+EOF
 cat >"${fake_bin}/uname" <<'EOF'
 #!/usr/bin/bash
 [[ $1 == -s ]] && printf '%s\n' "${FAKE_UNAME_S:-Linux}" || printf '%s\n' "${FAKE_UNAME_M:-x86_64}"
@@ -78,7 +92,7 @@ count=$((count + 1))
 [[ ${FAKE_MV_FAIL_AT:-0} != "${count}" ]] || exit 73
 exec /usr/bin/mv "$@"
 EOF
-chmod 0755 "${fake_bin}"/{uname,ldd,kbuildsycoca6,kquitapp6,mv}
+chmod 0755 "${fake_bin}"/{uname,ldd,kbuildsycoca6,kquitapp6,mkdir,mv}
 
 make_bundle() {
     local bundle=$1 payload=${2:-${runner}}
@@ -111,6 +125,8 @@ run_install() {
         PACKAGE_HELPER_BLOCK_RELEASE=${PACKAGE_HELPER_BLOCK_RELEASE:-} \
         FAKE_LDD_MISSING=${FAKE_LDD_MISSING:-0} FAKE_MV_FAIL_AT=${FAKE_MV_FAIL_AT:-0} \
         FAKE_MV_COUNT_FILE=${FAKE_MV_COUNT_FILE:-} \
+        FAKE_MKDIR_RACE_PATH=${FAKE_MKDIR_RACE_PATH:-} \
+        FAKE_MKDIR_RACE_MARKER=${FAKE_MKDIR_RACE_MARKER:-} \
         PATH="${fake_bin}:/usr/bin:/bin" /usr/bin/bash "${bundle}/install.sh"
 }
 run_uninstall() {
@@ -204,6 +220,28 @@ fi
 first_after=$(snapshot "${first_failure_root}")
 [[ ${first_before} == "${first_after}" ]] ||
     fail "first-install rollback did not restore the complete tree"
+
+# A directory created by another actor after the absence check is not owned by
+# this transaction and must survive rollback with its original mode.
+mkdir_race_root=${root}/mkdir-race-root
+mkdir_race_home=${mkdir_race_root}/home
+mkdir_race_path=${mkdir_race_home}/.local
+mkdir_race_marker=${root}/mkdir-race-marker
+mkdir_race_mv_count=${root}/mkdir-race-mv-count
+mkdir -p -- "${mkdir_race_home}"
+if FAKE_MKDIR_RACE_PATH=${mkdir_race_path} \
+    FAKE_MKDIR_RACE_MARKER=${mkdir_race_marker} \
+    FAKE_MV_FAIL_AT=2 FAKE_MV_COUNT_FILE=${mkdir_race_mv_count} \
+    run_install "${bundle}" "${mkdir_race_home}"; then
+    fail "mkdir-race transaction failure succeeded"
+fi
+[[ -f ${mkdir_race_marker} ]] || fail "mkdir race was not exercised"
+[[ -d ${mkdir_race_path} && ! -L ${mkdir_race_path} ]] ||
+    fail "rollback removed a directory created by another actor"
+[[ $(stat -c '%a' -- "${mkdir_race_path}") == 700 ]] ||
+    fail "installer changed the external directory mode"
+find "${mkdir_race_path}" -mindepth 1 -print -quit | grep -q . &&
+    fail "rollback left installer-owned entries in the external directory"
 
 # Reinstall atomically replaces all four exact owned files and invokes rescan.
 printf 'replacement plugin\n' >"${bundle}/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so"

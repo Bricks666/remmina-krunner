@@ -211,8 +211,11 @@ cleanup() {
         [[ -z ${staged_paths[index]} || ! -e ${staged_paths[index]} ]] || rm -f -- "${staged_paths[index]}" || status=74
         [[ -z ${backup_paths[index]} || ! -e ${backup_paths[index]} ]] || rm -f -- "${backup_paths[index]}" || status=74
     done
-    local directory
-    for directory in "${created_directories[@]}"; do
+    local directory_index directory
+    for ((directory_index = ${#created_directories[@]} - 1;
+         directory_index >= 0;
+         --directory_index)); do
+        directory=${created_directories[directory_index]}
         if [[ -d ${directory} && ! -L ${directory} ]]; then
             rmdir -- "${directory}" 2>/dev/null || true
         fi
@@ -224,40 +227,37 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-record_created_directory() {
-    local candidate=$1 candidate_slashes candidate_depth existing existing_slashes
-    local inserted=0
-    local -a ordered=()
-    for existing in "${created_directories[@]}"; do
-        [[ ${existing} != "${candidate}" ]] || return 0
-    done
-    candidate_slashes=${candidate//[^\/]/}
-    candidate_depth=${#candidate_slashes}
-    for existing in "${created_directories[@]}"; do
-        existing_slashes=${existing//[^\/]/}
-        if [[ ${inserted} == 0 && ${candidate_depth} -gt ${#existing_slashes} ]]; then
-            ordered+=("${candidate}")
-            inserted=1
+ensure_destination_directory() {
+    local destination=$1 candidate=${1} parent pending_directory
+    local -a pending_directories=()
+    while [[ ${candidate} != / ]]; do
+        if [[ -d ${candidate} && ! -L ${candidate} ]]; then
+            break
         fi
-        ordered+=("${existing}")
-    done
-    [[ ${inserted} == 1 ]] || ordered+=("${candidate}")
-    created_directories=("${ordered[@]}")
-}
-
-record_missing_directory_components() {
-    local candidate=$1 parent
-    while [[ ${candidate} != / && ! -e ${candidate} && ! -L ${candidate} ]]; do
-        record_created_directory "${candidate}"
+        if [[ -e ${candidate} || -L ${candidate} ]]; then
+            die "Install destination parent must be a real directory: ${candidate}" 68
+        fi
+        pending_directories=("${candidate}" "${pending_directories[@]}")
         parent=${candidate%/*}
         candidate=${parent:-/}
     done
+
+    for pending_directory in "${pending_directories[@]}"; do
+        if mkdir -m 0755 -- "${pending_directory}"; then
+            created_directories+=("${pending_directory}")
+        elif [[ -d ${pending_directory} && ! -L ${pending_directory} ]]; then
+            continue
+        else
+            die "Unable to create install destination directory: ${pending_directory}" 68
+        fi
+    done
+    [[ -d ${destination} && ! -L ${destination} ]] ||
+        die "Install destination parent must be a real directory: ${destination}" 68
 }
 
 for directory in "${directories[@]}"; do
-    record_missing_directory_components "${directory}"
+    ensure_destination_directory "${directory}"
 done
-mkdir -p -m 0755 -- "${directories[@]}"
 
 for index in 0 1 2 3; do
     staged_paths[index]=$(mktemp "${destination_paths[index]%/*}/.${destination_paths[index]##*/}.stage.XXXXXX")
