@@ -57,6 +57,7 @@ run_tests() {
 
 run_check() {
     local build_directory="${repository_root}/build-ci"
+    "${script_directory}/check_repository_diff.sh" "${repository_root}"
     configure_build "${build_directory}" Debug ON -DCMAKE_INSTALL_PREFIX=/usr
     cmake --build "${build_directory}" --parallel "${parallel_jobs}"
     QT_QPA_PLATFORM=offscreen \

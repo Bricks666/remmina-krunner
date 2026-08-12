@@ -1,0 +1,15 @@
+{
+    "name": "Remmina KRunner (Podman)",
+    "build": {
+        "dockerfile": "../containers/Containerfile",
+        "context": ".."
+    },
+    "workspaceFolder": "/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    "containerEnv": {
+        "QT_QPA_PLATFORM": "offscreen"
+    },
+    "postCreateCommand": "./scripts/ci.sh configure",
+    "remoteUser": "developer",
+    "updateRemoteUserUID": true
+}

@@ -10,6 +10,10 @@ image_name=localhost/remmina-krunner-dev:fedora44
 host_user_id=$(id -u)
 host_group_id=$(id -g)
 image_id_file=""
+container_environment=(
+    --env REMMINA_KRUNNER_CONTAINER=1
+    --env HOME=/tmp
+)
 
 cleanup_image_id_file() {
     if [[ -z "${image_id_file}" || (! -e "${image_id_file}" && ! -L "${image_id_file}") ]]; then
@@ -50,6 +54,17 @@ case "${mode}" in
         ;;
 esac
 
+if [[ ${CI:-} == true ]]; then
+    container_environment+=(--env CI=true)
+fi
+if [[ -n ${CI_DIFF_BASE:-} ]]; then
+    if [[ ${CI_DIFF_BASE} != ROOT && ! ${CI_DIFF_BASE} =~ ^[0-9a-f]{40}$ ]]; then
+        echo "CI_DIFF_BASE must be ROOT or a full lowercase commit hash." >&2
+        exit 64
+    fi
+    container_environment+=(--env "CI_DIFF_BASE=${CI_DIFF_BASE}")
+fi
+
 image_id_file=$(mktemp /tmp/remmina-krunner-image-id.XXXXXX)
 if [[ ! "${image_id_file}" =~ ^/tmp/remmina-krunner-image-id\.[[:alnum:]]{6}$ \
     || ! -f "${image_id_file}" || -L "${image_id_file}" ]]; then
@@ -76,8 +91,7 @@ if [[ ! "${image_id}" =~ ${image_id_pattern} ]]; then
 fi
 
 podman run --rm --userns=keep-id \
-    --env REMMINA_KRUNNER_CONTAINER=1 \
-    --env HOME=/tmp \
+    "${container_environment[@]}" \
     --user "${host_user_id}:${host_group_id}" \
     --volume "${repository_root}:/workspace:Z" \
     --workdir /workspace \

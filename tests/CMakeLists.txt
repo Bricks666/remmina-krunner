@@ -238,3 +238,40 @@ add_test(NAME build_testing_off
         -P ${CMAKE_CURRENT_SOURCE_DIR}/test_install_inventory.cmake
 )
 set_tests_properties(build_testing_off PROPERTIES TIMEOUT 120)
+
+find_program(TEST_GIT_EXECUTABLE NAMES git REQUIRED)
+find_program(TEST_ACTIONLINT_EXECUTABLE NAMES actionlint REQUIRED)
+
+add_test(NAME ci_git_check
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_ci_git_check.sh
+        ${PROJECT_SOURCE_DIR}/scripts/check_repository_diff.sh
+        ${TEST_GIT_EXECUTABLE}
+)
+
+add_test(NAME ci_diff_base
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_ci_diff_base.sh
+        ${PROJECT_SOURCE_DIR}/scripts/resolve_ci_diff_base.sh
+        ${TEST_GIT_EXECUTABLE}
+)
+
+add_test(NAME repository_config
+    COMMAND ${CMAKE_COMMAND}
+        -DREPO_ROOT=${PROJECT_SOURCE_DIR}
+        -DBASH_EXECUTABLE=${TEST_BASH_EXECUTABLE}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_repository_config.cmake
+)
+
+add_test(NAME workflow_actionlint
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_workflow_actionlint.sh
+        ${TEST_ACTIONLINT_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/.github/workflows/ci.yml
+)
+
+add_test(NAME documentation
+    COMMAND ${CMAKE_COMMAND}
+        -DREPO_ROOT=${PROJECT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_documentation.cmake
+)
