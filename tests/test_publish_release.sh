@@ -103,16 +103,16 @@ fake_gh()
                 local query_status
                 if [[ -f ${GH_STATE_DIR}/query-status ]]; then
                     query_status=$(<"${GH_STATE_DIR}/query-status")
-                elif [[ ${release_state} == absent ]]; then
-                    query_status=404
-                else
+                elif [[ ${release_state} == published ]]; then
                     query_status=200
+                else
+                    query_status=404
                 fi
                 printf 'HTTP/2.0 %s mock\n\n' "${query_status}"
                 [[ ${query_status} == 200 ]]
                 return
             fi
-            [[ ${release_state} != absent ]] || return 1
+            [[ ${release_state} == published ]] || return 1
             if [[ ${jq_filter} == *'.id'* ]]; then
                 if [[ ${release_state} == draft ]]; then
                     printf '%s\ttrue\t%s\n' "${release_id}" "${release_tag}"
@@ -121,6 +121,37 @@ fake_gh()
                 fi
                 return
             fi
+        fi
+
+        if [[ ${endpoint} == "repos/${EXPECTED_REPO}/releases?per_page=100" ]]; then
+            [[ ${paginate} -eq 1 && ${jq_filter} == *'.id'* &&
+               ${jq_filter} == *'.draft'* && ${jq_filter} == *'.tag_name'* ]]
+            if [[ -f ${GH_STATE_DIR}/fail-next-release-list ]]; then
+                rm -f -- "${GH_STATE_DIR}/fail-next-release-list"
+                return 1
+            fi
+            if [[ -f ${GH_STATE_DIR}/release-list-override ]]; then
+                cat -- "${GH_STATE_DIR}/release-list-override"
+                return
+            fi
+            if [[ -f ${GH_STATE_DIR}/release-list-prefix ]]; then
+                cat -- "${GH_STATE_DIR}/release-list-prefix"
+            fi
+            if [[ ${release_state} != absent ]]; then
+                if [[ ${release_state} == draft ]]; then
+                    printf '%s\ttrue\t%s\n' "${release_id}" "${release_tag}"
+                else
+                    printf '%s\tfalse\t%s\n' "${release_id}" "${release_tag}"
+                fi
+            fi
+            if [[ -f ${GH_STATE_DIR}/release-list-extra-match ]]; then
+                if [[ ${release_state} == draft ]]; then
+                    printf '%s\ttrue\t%s\n' "$((release_id + 1))" "${release_tag}"
+                else
+                    printf '%s\tfalse\t%s\n' "$((release_id + 1))" "${release_tag}"
+                fi
+            fi
+            return
         fi
 
         if [[ ${endpoint} == "repos/${EXPECTED_REPO}/releases/${release_id}" ]]; then
@@ -601,14 +632,39 @@ expect_failure
 [[ $(<"${GH_STATE_DIR}/release-state") == draft ]]
 assert_exact_remote_pair
 
-# Authentication and server failures are not mistaken for absence.
-for query_status in 401 503; do
-    new_state query-${query_status} absent
-    new_assets query-${query_status}
-    printf '%s\n' "${query_status}" >"${GH_STATE_DIR}/query-status"
+# Collection failures are not mistaken for absence and cannot create a draft.
+new_state release-list-error absent
+new_assets release-list-error
+: >"${GH_STATE_DIR}/fail-next-release-list"
+expect_failure
+[[ $(<"${GH_STATE_DIR}/release-state") == absent ]]
+[[ -z $(find "${GH_STATE_DIR}/names" -mindepth 1 -print -quit) ]]
+
+# Draft discovery is paginated and ignores unrelated release records.
+new_state later-page draft
+new_assets later-page
+add_old_pair
+printf '77\tfalse\tv9.9.9\n88\ttrue\tv0.0.9\n' \
+    >"${GH_STATE_DIR}/release-list-prefix"
+run_publisher
+assert_exact_remote_pair
+assert_remote_matches_local
+
+# Duplicate exact tags and malformed collection records fail closed.
+new_state duplicate-release-record draft
+new_assets duplicate-release-record
+add_old_pair
+: >"${GH_STATE_DIR}/release-list-extra-match"
+expect_failure
+assert_old_pair_preserved
+
+for malformed_record in $'invalid\ttrue\tv0.1.0' $'101\tmaybe\tv0.1.0' $'101\ttrue'; do
+    new_state malformed-release-record draft
+    new_assets malformed-release-record
+    add_old_pair
+    printf '%s\n' "${malformed_record}" >"${GH_STATE_DIR}/release-list-override"
     expect_failure
-    [[ $(<"${GH_STATE_DIR}/release-state") == absent ]]
-    [[ -z $(find "${GH_STATE_DIR}/names" -mindepth 1 -print -quit) ]]
+    assert_old_pair_preserved
 done
 
 # An existing draft with the canonical pair is transactionally replaced.

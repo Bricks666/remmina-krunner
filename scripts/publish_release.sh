@@ -23,6 +23,8 @@ prior_archive_id=
 prior_checksum_id=
 recovery_archive_id=
 recovery_checksum_id=
+lookup_release_id=
+lookup_release_draft=
 
 die()
 {
@@ -35,7 +37,7 @@ die()
 require_commands()
 {
     local command_name
-    for command_name in cmp find gh mktemp readlink rm sed sha256sum sort stat; do
+    for command_name in cmp find gh mktemp readlink rm sha256sum sort stat; do
         command -v "${command_name}" >/dev/null 2>&1 ||
             die "Required release publication command is unavailable: ${command_name}" 69
     done
@@ -85,6 +87,39 @@ tag_matches_expected_commit()
     local observed_commit
     observed_commit=$(resolve_tag_commit) || return 1
     [[ ${observed_commit} == "${expected_commit}" ]]
+}
+
+lookup_release_by_tag()
+{
+    local records_path=${temporary_root}/release-records.tsv
+    local record_id record_draft record_tag extra_field
+    local record_count=0 match_count=0
+
+    lookup_release_id=
+    lookup_release_draft=
+    if ! gh api \
+        --paginate \
+        --jq '.[] | [.id, .draft, .tag_name] | @tsv' \
+        "repos/${repository}/releases?per_page=100" >"${records_path}"; then
+        return 2
+    fi
+
+    while IFS=$'\t' read -r record_id record_draft record_tag extra_field; do
+        ((record_count += 1))
+        if ((record_count > 10000)) ||
+            [[ ! ${record_id} =~ ^[1-9][0-9]*$ ||
+               ! ${record_draft} =~ ^(true|false)$ ||
+               -z ${record_tag} || -n ${extra_field} ]]; then
+            return 3
+        fi
+        [[ ${record_tag} == "${release_tag}" ]] || continue
+        ((match_count += 1))
+        ((match_count == 1)) || return 4
+        lookup_release_id=${record_id}
+        lookup_release_draft=${record_draft}
+    done <"${records_path}"
+
+    ((match_count == 1)) || return 1
 }
 
 ensure_captured_release_is_draft()
@@ -251,14 +286,6 @@ archive_digest=${BASH_REMATCH[1]}
 tag_matches_expected_commit ||
     die "Release tag does not resolve to the expected checkout commit" 65
 
-query_endpoint=repos/${repository}/releases/tags/${release_tag}
-set +e
-query_headers=$(gh api --silent --include "${query_endpoint}")
-query_result=$?
-set -e
-http_status=$(printf '%s\n' "${query_headers}" |
-    sed -nE '1s#^HTTP/[^ ]+ ([0-9]{3}).*$#\1#p')
-
 verify_asset_bytes()
 {
     local asset_id=$1
@@ -366,10 +393,9 @@ upload_pending_asset()
         die "${description} response ID is absent from the captured release" 65
 }
 
-if [[ ${query_result} -ne 0 ]]; then
-    if [[ ${http_status} != 404 ]]; then
-        die "Release query failed with HTTP status ${http_status:-unknown}" 69
-    fi
+release_lookup_result=0
+lookup_release_by_tag || release_lookup_result=$?
+if [[ ${release_lookup_result} -eq 1 ]]; then
     tag_matches_expected_commit ||
         die "Release tag moved before draft creation" 73
     gh release create "${release_tag}" \
@@ -381,12 +407,13 @@ if [[ ${query_result} -ne 0 ]]; then
         --verify-tag ||
         die "Unable to create draft release" 69
 
-    release_record=$(gh api \
-        --jq '[.id, .draft, .tag_name] | @tsv' \
-        "${query_endpoint}") || die "Unable to read newly created draft release" 69
-    IFS=$'\t' read -r release_id release_draft observed_tag <<<"${release_record}"
-    [[ ${release_id} =~ ^[0-9]+$ && ${release_draft} == true &&
-       ${observed_tag} == "${release_tag}" ]] ||
+    release_lookup_result=0
+    lookup_release_by_tag || release_lookup_result=$?
+    [[ ${release_lookup_result} -eq 0 ]] ||
+        die "Unable to read newly created draft release" 69
+    release_id=${lookup_release_id}
+    release_draft=${lookup_release_draft}
+    [[ ${release_draft} == true ]] ||
         die "New release is not the expected draft" 73
     ensure_publication_identity ||
         die "New draft or release tag changed after creation" 73
@@ -394,14 +421,24 @@ if [[ ${query_result} -ne 0 ]]; then
     exit 0
 fi
 
-[[ ${http_status} == 200 ]] ||
-    die "Release query returned unexpected HTTP status ${http_status:-unknown}" 69
-release_record=$(gh api \
-    --jq '[.id, .draft, .tag_name] | @tsv' \
-    "${query_endpoint}") || die "Unable to read existing release" 69
-IFS=$'\t' read -r release_id release_draft observed_tag <<<"${release_record}"
-[[ ${release_id} =~ ^[0-9]+$ && ${observed_tag} == "${release_tag}" ]] ||
-    die "Existing release identity does not match the requested tag" 65
+case ${release_lookup_result} in
+    0)
+        ;;
+    2)
+        die "Unable to list repository releases" 69
+        ;;
+    3)
+        die "Release collection returned an invalid record" 65
+        ;;
+    4)
+        die "Release collection contains duplicate exact-tag records" 65
+        ;;
+    *)
+        die "Unexpected release lookup result" 70
+        ;;
+esac
+release_id=${lookup_release_id}
+release_draft=${lookup_release_draft}
 [[ ${release_draft} == true ]] ||
     die "Refusing to mutate published release ${release_tag}" 73
 ensure_publication_identity ||
