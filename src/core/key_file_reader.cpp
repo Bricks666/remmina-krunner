@@ -5,7 +5,11 @@
 
 #include <QByteArrayView>
 #include <QFile>
-#include <QFileInfo>
+
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace {
 
@@ -93,7 +97,7 @@ bool isValidUtf8(QByteArrayView input)
 
 bool isSyntacticWhitespace(char character)
 {
-    return character == ' ' || character == '\t';
+    return character == ' ' || character == '\t' || character == '\f';
 }
 
 qsizetype firstNonWhitespace(QByteArrayView line)
@@ -105,7 +109,7 @@ qsizetype firstNonWhitespace(QByteArrayView line)
     return index;
 }
 
-QByteArrayView trimmed(QByteArrayView value)
+QByteArrayView trimmedKey(QByteArrayView value)
 {
     qsizetype start = 0;
     while (start < value.size() && isSyntacticWhitespace(value.at(start))) {
@@ -117,6 +121,15 @@ QByteArrayView trimmed(QByteArrayView value)
         --end;
     }
     return value.sliced(start, end - start);
+}
+
+QByteArrayView trimmedGroupHeader(QByteArrayView value)
+{
+    qsizetype end = value.size();
+    while (end > 0 && (value.at(end - 1) == ' ' || value.at(end - 1) == '\t')) {
+        --end;
+    }
+    return value.first(end);
 }
 
 QByteArrayView leftTrimmed(QByteArrayView value)
@@ -217,6 +230,35 @@ ReadResult malformed(QByteArray &line)
     return ReadError::Malformed;
 }
 
+bool openRegularFile(QFile &file, const QString &path)
+{
+    QByteArray encodedPath = QFile::encodeName(path);
+    int descriptor = -1;
+    do {
+        descriptor = ::open(encodedPath.constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    } while (descriptor < 0 && errno == EINTR);
+    wipe(encodedPath);
+    if (descriptor < 0) {
+        return false;
+    }
+
+    struct stat metadata {};
+    int statResult = -1;
+    do {
+        statResult = ::fstat(descriptor, &metadata);
+    } while (statResult < 0 && errno == EINTR);
+    if (statResult < 0 || !S_ISREG(metadata.st_mode)) {
+        ::close(descriptor);
+        return false;
+    }
+
+    if (!file.open(descriptor, QIODevice::ReadOnly, QFileDevice::AutoCloseHandle)) {
+        ::close(descriptor);
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 namespace key_file_reader_detail {
@@ -224,13 +266,8 @@ namespace key_file_reader_detail {
 ReadResult readAllowedKeyFileValuesWithError(
     const QString &path, QStringView section, const QSet<QString> &allowedKeys)
 {
-    const QFileInfo fileInfo(path);
-    if (!fileInfo.exists() || !fileInfo.isFile()) {
-        return ReadError::Unreadable;
-    }
-
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
+    QFile file;
+    if (!openRegularFile(file, path)) {
         return ReadError::Unreadable;
     }
 
@@ -269,15 +306,14 @@ ReadResult readAllowedKeyFileValuesWithError(
 
         const QByteArrayView lineView(line);
         const qsizetype contentStart = firstNonWhitespace(lineView);
-        if (contentStart == lineView.size() || lineView.at(contentStart) == '#'
-            || lineView.at(contentStart) == ';') {
+        if (contentStart == lineView.size() || lineView.at(contentStart) == '#') {
             wipe(line);
             continue;
         }
 
         const QByteArrayView contentView = lineView.sliced(contentStart);
         if (contentView.at(0) == '[') {
-            const QByteArrayView header = trimmed(contentView);
+            const QByteArrayView header = trimmedGroupHeader(contentView);
             if (header.size() < 3 || header.back() != ']') {
                 return malformed(line);
             }
@@ -302,7 +338,7 @@ ReadResult readAllowedKeyFileValuesWithError(
         if (equals < 0) {
             return malformed(line);
         }
-        const QByteArrayView encodedKey = trimmed(contentView.first(equals));
+        const QByteArrayView encodedKey = trimmedKey(contentView.first(equals));
         if (encodedKey.isEmpty()) {
             return malformed(line);
         }

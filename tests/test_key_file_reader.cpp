@@ -8,6 +8,8 @@
 #include <QFile>
 #include <QTemporaryDir>
 
+#include <sys/stat.h>
+
 namespace {
 
 QString writeFile(QTemporaryDir &directory, QStringView fileName, const QByteArray &contents)
@@ -49,6 +51,9 @@ class KeyFileReaderTest : public QObject {
 private slots:
     void readsOnlyAllowlistedValuesFromExactSection();
     void acceptsSyntacticWhitespaceAroundExactSectionHeader();
+    void matchesVerifiedGlibWhitespace_data();
+    void matchesVerifiedGlibWhitespace();
+    void rejectsSemicolonComments();
     void handlesCrLfFirstEqualsUnicodeAndEscapes();
     void preservesMeaningfulTrailingValueWhitespace();
     void usesLastDuplicateAllowedValue();
@@ -61,6 +66,8 @@ private slots:
     void rejectsExcessiveTotalBytes();
     void rejectsWrongOrMissingSection();
     void rejectsUnreadableAndNonregularInputs();
+    void followsSymlinkToRegularInput();
+    void rejectsInvalidAndIncompleteUtf8_data();
     void rejectsInvalidAndIncompleteUtf8();
     void rejectsMalformedSectionsAndLines();
 };
@@ -107,6 +114,87 @@ void KeyFileReaderTest::acceptsSyntacticWhitespaceAroundExactSectionHeader()
     QCOMPARE(result->value(QStringLiteral("name")), QStringLiteral("Visible"));
 }
 
+void KeyFileReaderTest::matchesVerifiedGlibWhitespace_data()
+{
+    QTest::addColumn<QByteArray>("contents");
+    QTest::addColumn<bool>("shouldParse");
+    QTest::addColumn<bool>("shouldContainName");
+    QTest::addColumn<QString>("expectedName");
+
+    QTest::newRow("form-feed-before-group")
+        << QByteArray("\f[remmina]\nname=Visible\n") << true << true
+        << QStringLiteral("Visible");
+    QTest::newRow("form-feed-before-key")
+        << QByteArray("[remmina]\n\fname=Visible\n") << true << true
+        << QStringLiteral("Visible");
+    QTest::newRow("form-feed-before-equals")
+        << QByteArray("[remmina]\nname\f=Visible\n") << true << true
+        << QStringLiteral("Visible");
+    QTest::newRow("form-feed-after-equals")
+        << QByteArray("[remmina]\nname=\fVisible\n") << true << true
+        << QStringLiteral("Visible");
+    QTest::newRow("vertical-tab-before-group")
+        << QByteArray("\v[remmina]\nname=Visible\n") << false << false << QString();
+    QTest::newRow("vertical-tab-before-key")
+        << QByteArray("[remmina]\n\vname=Visible\n") << true << false << QString();
+    QTest::newRow("vertical-tab-before-equals")
+        << QByteArray("[remmina]\nname\v=Visible\n") << true << false << QString();
+    QTest::newRow("vertical-tab-after-equals")
+        << QByteArray("[remmina]\nname=\vVisible\n") << true << true
+        << QStringLiteral("\vVisible");
+    QTest::newRow("form-feed-after-group")
+        << QByteArray("[remmina]\f\nname=Visible\n") << false << false << QString();
+    QTest::newRow("vertical-tab-after-group")
+        << QByteArray("[remmina]\v\nname=Visible\n") << false << false << QString();
+    QTest::newRow("trailing-form-feed-and-vertical-tab")
+        << QByteArray("[remmina]\nname=Visible\v\f\n") << true << true
+        << QStringLiteral("Visible\v\f");
+}
+
+void KeyFileReaderTest::matchesVerifiedGlibWhitespace()
+{
+    QFETCH(QByteArray, contents);
+    QFETCH(bool, shouldParse);
+    QFETCH(bool, shouldContainName);
+    QFETCH(QString, expectedName);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = writeFile(directory, u"ascii-whitespace.remmina", contents);
+    const auto result = readAllowedKeyFileValues(
+        path, QStringView(u"remmina"), {QStringLiteral("name")});
+
+    QCOMPARE(result.has_value(), shouldParse);
+    if (!shouldParse) {
+        return;
+    }
+    QCOMPARE(result->contains(QStringLiteral("name")), shouldContainName);
+    if (shouldContainName) {
+        QCOMPARE(result->value(QStringLiteral("name")), expectedName);
+    }
+}
+
+void KeyFileReaderTest::rejectsSemicolonComments()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString beforeGroup = writeFile(
+        directory,
+        u"semicolon-before.remmina",
+        QByteArray("; synthetic-semicolon-secret\n[remmina]\nname=Visible\n"));
+    const QString insideGroup = writeFile(
+        directory,
+        u"semicolon-inside.remmina",
+        QByteArray("[remmina]\n; synthetic-semicolon-secret\nname=Visible\n"));
+
+    QVERIFY(!readAllowedKeyFileValues(
+                 beforeGroup, QStringView(u"remmina"), {QStringLiteral("name")})
+                 .has_value());
+    QVERIFY(!readAllowedKeyFileValues(
+                 insideGroup, QStringView(u"remmina"), {QStringLiteral("name")})
+                 .has_value());
+}
+
 void KeyFileReaderTest::handlesCrLfFirstEqualsUnicodeAndEscapes()
 {
     QTemporaryDir directory;
@@ -115,7 +203,7 @@ void KeyFileReaderTest::handlesCrLfFirstEqualsUnicodeAndEscapes()
         directory,
         u"escaped-crlf.remmina",
         QByteArray("# comment\r\n"
-                   "   ; indented comment\r\n"
+                   "   # indented comment\r\n"
                    "\t \r\n"
                    "[other]\r\n"
                    "name=Not selected\r\n"
@@ -304,28 +392,70 @@ void KeyFileReaderTest::rejectsUnreadableAndNonregularInputs()
                                       QStringView(u"remmina"),
                                       {QStringLiteral("name")})
                  .has_value());
+
+    const QString fifoPath = directory.filePath(QStringLiteral("profile.fifo"));
+    const QByteArray encodedFifoPath = QFile::encodeName(fifoPath);
+    QCOMPARE(::mkfifo(encodedFifoPath.constData(), 0600), 0);
+    const auto fifoResult = key_file_reader_detail::readAllowedKeyFileValuesWithError(
+        fifoPath, QStringView(u"remmina"), {QStringLiteral("name")});
+    const auto *fifoError = std::get_if<key_file_reader_detail::ReadError>(&fifoResult);
+    QVERIFY(fifoError != nullptr);
+    QCOMPARE(*fifoError, key_file_reader_detail::ReadError::Unreadable);
+
+    const auto deviceResult = key_file_reader_detail::readAllowedKeyFileValuesWithError(
+        QStringLiteral("/dev/null"),
+        QStringView(u"remmina"),
+        {QStringLiteral("name")});
+    const auto *deviceError = std::get_if<key_file_reader_detail::ReadError>(&deviceResult);
+    QVERIFY(deviceError != nullptr);
+    QCOMPARE(*deviceError, key_file_reader_detail::ReadError::Unreadable);
+}
+
+void KeyFileReaderTest::followsSymlinkToRegularInput()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString target = writeFile(
+        directory, u"target.remmina", QByteArray("[remmina]\nname=Visible\n"));
+    const QString link = directory.filePath(QStringLiteral("link.remmina"));
+    QVERIFY(QFile::link(target, link));
+
+    const auto result = readAllowedKeyFileValues(
+        link, QStringView(u"remmina"), {QStringLiteral("name")});
+
+    QVERIFY(result.has_value());
+    QCOMPARE(result->value(QStringLiteral("name")), QStringLiteral("Visible"));
+}
+
+void KeyFileReaderTest::rejectsInvalidAndIncompleteUtf8_data()
+{
+    QTest::addColumn<QByteArray>("invalidBytes");
+    QTest::addColumn<bool>("appendNewline");
+
+    QTest::newRow("bad-continuation") << QByteArray("\xC3\x28", 2) << true;
+    QTest::newRow("incomplete-at-eof") << QByteArray("\xE2\x82", 2) << false;
+    QTest::newRow("overlong-two-byte") << QByteArray("\xC0\xAF", 2) << true;
+    QTest::newRow("utf16-surrogate") << QByteArray("\xED\xA0\x80", 3) << true;
+    QTest::newRow("above-unicode-maximum") << QByteArray("\xF4\x90\x80\x80", 4) << true;
+    QTest::newRow("lone-continuation") << QByteArray("\x80", 1) << true;
 }
 
 void KeyFileReaderTest::rejectsInvalidAndIncompleteUtf8()
 {
+    QFETCH(QByteArray, invalidBytes);
+    QFETCH(bool, appendNewline);
+
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    QByteArray invalid("[remmina]\nname=Bad");
-    invalid.append(char(0xC3));
-    invalid.append(char(0x28));
-    invalid.append('\n');
-    QByteArray incomplete("[remmina]\nname=Bad");
-    incomplete.append(char(0xE2));
-    incomplete.append(char(0x82));
-
-    const QString invalidPath = writeFile(directory, u"invalid-utf8.remmina", invalid);
-    const QString incompletePath = writeFile(directory, u"incomplete-utf8.remmina", incomplete);
+    QByteArray contents("[remmina]\nname=Bad");
+    contents.append(invalidBytes);
+    if (appendNewline) {
+        contents.append('\n');
+    }
+    const QString path = writeFile(directory, u"invalid-utf8.remmina", contents);
 
     QVERIFY(!readAllowedKeyFileValues(
-                 invalidPath, QStringView(u"remmina"), {QStringLiteral("name")})
-                 .has_value());
-    QVERIFY(!readAllowedKeyFileValues(
-                 incompletePath, QStringView(u"remmina"), {QStringLiteral("name")})
+                 path, QStringView(u"remmina"), {QStringLiteral("name")})
                  .has_value());
 }
 
