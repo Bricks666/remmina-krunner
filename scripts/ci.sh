@@ -14,7 +14,7 @@ repository_root=$(cd -- "${script_directory}/.." && pwd -P)
 parallel_jobs=${CMAKE_BUILD_PARALLEL_LEVEL:-2}
 
 usage() {
-    echo "Usage: $0 {build|configure|test [ctest-regex]|check|sanitize|release-build}" >&2
+    echo "Usage: $0 {build|configure|test [ctest-regex]|check|sanitize|release-build|source-bundle}" >&2
 }
 
 configure_build() {
@@ -117,6 +117,63 @@ release_build() {
     cmake --build "${build_directory}" --parallel "${parallel_jobs}"
 }
 
+source_bundle() {
+    local build_directory="${repository_root}/build-source-bundle-build"
+    local bundle_root="${repository_root}/build-source-bundle"
+    local bundle_prefix=remmina-krunner
+    local staging_root
+
+    configure_build "${build_directory}" Release OFF \
+        -DCMAKE_INSTALL_PREFIX="/${bundle_prefix}"
+    cmake --build "${build_directory}" --parallel "${parallel_jobs}"
+
+    staging_root=$(mktemp -d \
+        "${repository_root}/build-source-bundle-stage.XXXXXX")
+    if [[ ! ${staging_root} =~ ^${repository_root}/build-source-bundle-stage\.[[:alnum:]]{6}$ \
+        || ! -d ${staging_root} || -L ${staging_root} ]]; then
+        echo "Refusing unexpected source-bundle staging directory: ${staging_root}" >&2
+        exit 1
+    fi
+    cleanup_source_bundle_stage() {
+        if [[ -z ${staging_root} ]]; then
+            return
+        fi
+        if [[ ${staging_root} =~ ^${repository_root}/build-source-bundle-stage\.[[:alnum:]]{6}$ \
+            && -d ${staging_root} && ! -L ${staging_root} ]]; then
+            cmake -E remove_directory "${staging_root}"
+            staging_root=
+        else
+            echo "Refusing unsafe source-bundle staging cleanup: ${staging_root}" >&2
+            return 1
+        fi
+    }
+    trap cleanup_source_bundle_stage EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    DESTDIR="${staging_root}" cmake --install "${build_directory}"
+    cmake \
+        -DSTAGE_ROOT="${staging_root}" \
+        -DINSTALL_PREFIX_RELATIVE="${bundle_prefix}" \
+        -DLAYOUT_FILE="${build_directory}/RemminaKRunnerInstallLayout.cmake" \
+        -P "${repository_root}/cmake/ValidateInstallInventory.cmake"
+
+    if [[ -e ${bundle_root} || -L ${bundle_root} ]]; then
+        if [[ ! -d ${bundle_root} || -L ${bundle_root} \
+            || ${bundle_root} != "${repository_root}/build-source-bundle" ]]; then
+            echo "Refusing unsafe existing source-bundle path: ${bundle_root}" >&2
+            exit 1
+        fi
+        cmake -E remove_directory "${bundle_root}"
+    fi
+    mv -- "${staging_root}" "${bundle_root}"
+    staging_root=
+    trap - EXIT HUP INT TERM
+    printf 'Source installation bundle: %s\n' \
+        "${bundle_root}/${bundle_prefix}"
+}
+
 if [[ $# -lt 1 || $# -gt 2 ]]; then
     usage
     exit 64
@@ -145,6 +202,10 @@ case "$1" in
     release-build)
         [[ $# -eq 1 ]] || { usage; exit 64; }
         release_build
+        ;;
+    source-bundle)
+        [[ $# -eq 1 ]] || { usage; exit 64; }
+        source_bundle
         ;;
     *)
         usage

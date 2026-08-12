@@ -7,7 +7,9 @@
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
     "containerEnv": {
-        "QT_QPA_PLATFORM": "offscreen"
+        "HOME": "/tmp",
+        "QT_QPA_PLATFORM": "offscreen",
+        "REMMINA_KRUNNER_CONTAINER": "1"
     },
     "postCreateCommand": "./scripts/ci.sh configure",
     "remoteUser": "developer",

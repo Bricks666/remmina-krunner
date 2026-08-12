@@ -16,9 +16,11 @@ stay in the checked-in Fedora 44 container image.
 
 ### Install a verified release
 
-For a published release, download both the archive and its checksum from the
-same GitHub Releases page. Verify before extracting or running any bundled
-script:
+Once a release is published, download both the archive and its checksum from
+the same GitHub Releases page. The names and URL below illustrate the expected
+release layout; until that release exists, use the source installation path in
+the next section. Verify a published archive before extracting or running any
+bundled script:
 
 ```bash
 version=v0.1.0
@@ -46,13 +48,19 @@ git clone https://github.com/Bricks666/remmina-krunner.git
 cd remmina-krunner
 ./scripts/container.sh check
 ./scripts/container.sh release-build
+./scripts/container.sh source-bundle
+./build-source-bundle/remmina-krunner/install.sh
 ```
 
 `check` performs a debug build, the complete test suite, and an exact staged
 install inspection. `release-build` proves the non-test Release configuration.
-Use the checksum-verified bundle above for a normal user-local installation.
-The only host path mounted by either command is the repository workspace;
-container `HOME` is `/tmp`.
+`source-bundle` performs its own Release build, stages the exact install
+inventory at `build-source-bundle/remmina-krunner`, and validates it before
+publishing that directory. Its bundled installer is then run on the host so it
+can install into the current user's `$HOME/.local` and refresh the current KDE
+session. It uses no host compiler or build system. The only host path mounted by
+the container commands is the repository workspace; container `HOME` is
+`/tmp`.
 
 ### Uninstall or upgrade
 

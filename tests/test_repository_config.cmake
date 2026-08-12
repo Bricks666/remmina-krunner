@@ -117,11 +117,24 @@ endif()
 string(JSON DEV_DOCKERFILE GET "${DEVCONTAINER_TEXT}" build dockerfile)
 string(JSON DEV_USER GET "${DEVCONTAINER_TEXT}" remoteUser)
 string(JSON DEV_MOUNT GET "${DEVCONTAINER_TEXT}" workspaceMount)
+string(JSON DEV_POST_CREATE GET "${DEVCONTAINER_TEXT}" postCreateCommand)
+string(JSON DEV_CONTAINER_MARKER GET "${DEVCONTAINER_TEXT}"
+    containerEnv REMMINA_KRUNNER_CONTAINER)
+string(JSON DEV_HOME GET "${DEVCONTAINER_TEXT}" containerEnv HOME)
 if(NOT DEV_DOCKERFILE STREQUAL "../containers/Containerfile")
     message(FATAL_ERROR "Dev Container must use containers/Containerfile")
 endif()
 if(NOT DEV_USER STREQUAL "developer")
     message(FATAL_ERROR "Dev Container must use the unprivileged developer user")
+endif()
+if(NOT DEV_POST_CREATE STREQUAL "./scripts/ci.sh configure")
+    message(FATAL_ERROR "Dev Container must configure through the in-container CI script")
+endif()
+if(NOT DEV_CONTAINER_MARKER STREQUAL "1")
+    message(FATAL_ERROR "Dev Container must set the CI script container marker")
+endif()
+if(NOT DEV_HOME STREQUAL "/tmp")
+    message(FATAL_ERROR "Dev Container must isolate HOME at /tmp")
 endif()
 if(NOT DEV_MOUNT STREQUAL
    [=[source=${localWorkspaceFolder},target=/workspace,type=bind]=])
@@ -153,6 +166,7 @@ foreach(NEEDLE IN ITEMS
     [=[--user "${host_user_id}:${host_group_id}"]=]
     "CI_DIFF_BASE"
     [=[--volume "${repository_root}:/workspace:Z"]=]
+    "source-bundle"
 )
     assert_contains("${WRAPPER_TEXT}" "container wrapper" "${NEEDLE}")
 endforeach()
@@ -166,6 +180,9 @@ endforeach()
 
 file(READ "${CI_SCRIPT}" CI_TEXT)
 assert_contains("${CI_TEXT}" "CI script" [=["${script_directory}/check_repository_diff.sh" "${repository_root}"]=])
+assert_contains("${CI_TEXT}" "CI script" "source_bundle")
+assert_contains("${CI_TEXT}" "CI script" [=[-DCMAKE_INSTALL_PREFIX="/${bundle_prefix}"]=])
+assert_contains("${CI_TEXT}" "CI script" "ValidateInstallInventory.cmake")
 file(READ "${GIT_CHECK}" GIT_CHECK_TEXT)
 assert_contains("${GIT_CHECK_TEXT}" "repository checker" "clang-format")
 

@@ -24,6 +24,7 @@ endfunction()
 foreach(NEEDLE IN ITEMS
     "## Installation"
     "sha256sum --check"
+    "Once a release is published"
     "install.sh"
     "uninstall.sh"
     "rem <query>"
@@ -47,6 +48,8 @@ foreach(NEEDLE IN ITEMS
     "password"
     "profile path"
     "manual Plasma"
+    "./scripts/container.sh source-bundle"
+    "./build-source-bundle/remmina-krunner/install.sh"
 )
     assert_contains("${README_TEXT}" "README.md" "${NEEDLE}")
 endforeach()

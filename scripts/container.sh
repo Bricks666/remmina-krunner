@@ -30,7 +30,7 @@ cleanup_image_id_file() {
 trap cleanup_image_id_file EXIT
 
 usage() {
-    echo "Usage: $0 {build|configure|test [ctest-regex]|check|sanitize|release-build}" >&2
+    echo "Usage: $0 {build|configure|test [ctest-regex]|check|sanitize|release-build|source-bundle}" >&2
 }
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
@@ -40,7 +40,7 @@ fi
 
 mode=$1
 case "${mode}" in
-    build|configure|check|sanitize|release-build)
+    build|configure|check|sanitize|release-build|source-bundle)
         if [[ $# -ne 1 ]]; then
             usage
             exit 64
