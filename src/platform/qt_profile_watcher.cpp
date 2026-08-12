@@ -59,8 +59,12 @@ bool QtProfileWatcher::replacePaths(const QStringList &paths, ChangedCallback ca
         &QFileSystemWatcher::directoryChanged,
         this,
         [this, installedGeneration](const QString &) {
-            if (installedGeneration == generation_ && callback_) {
-                callback_();
+            try {
+                if (installedGeneration == generation_ && callback_) {
+                    const ChangedCallback callback = callback_;
+                    callback();
+                }
+            } catch (...) {
             }
         });
     fileConnection_ = connect(
@@ -68,8 +72,12 @@ bool QtProfileWatcher::replacePaths(const QStringList &paths, ChangedCallback ca
         &QFileSystemWatcher::fileChanged,
         this,
         [this, installedGeneration](const QString &) {
-            if (installedGeneration == generation_ && callback_) {
-                callback_();
+            try {
+                if (installedGeneration == generation_ && callback_) {
+                    const ChangedCallback callback = callback_;
+                    callback();
+                }
+            } catch (...) {
             }
         });
     return true;

@@ -42,7 +42,12 @@ struct Candidate {
     InternalFileSignature signature;
 };
 
-using EnumerationResult = std::variant<QList<Candidate>, ProfileRepositoryError>;
+struct Enumeration {
+    QList<Candidate> candidates;
+    DirectoryFingerprint directoryFingerprint;
+};
+
+using EnumerationResult = std::variant<Enumeration, ProfileRepositoryError>;
 
 struct CandidateInspection {
     std::optional<Candidate> candidate;
@@ -164,6 +169,56 @@ QString canonicalIdentityForDescriptor(int descriptor)
     return QDir::cleanPath(identity);
 }
 
+QStringList symlinkParentPaths(const QString &lexicalPath)
+{
+    const QString cleaned = QDir::cleanPath(lexicalPath);
+    if (cleaned.isEmpty() || !QDir::isAbsolutePath(cleaned)) {
+        return {};
+    }
+
+    QStringList parents;
+    QString current = QStringLiteral("/");
+    const QStringList components = cleaned.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &component : components) {
+        const QString parent = current;
+        current = cleanChildPath(current, component);
+        QByteArray encodedPath = QFile::encodeName(current);
+        struct stat metadata {};
+        int result = -1;
+        do {
+            result = ::lstat(encodedPath.constData(), &metadata);
+        } while (result < 0 && errno == EINTR);
+        encodedPath.fill('\0');
+        if (result == 0 && S_ISLNK(metadata.st_mode)) {
+            parents.append(QDir::cleanPath(parent));
+        }
+    }
+    return parents;
+}
+
+std::optional<DirectoryFingerprint> fingerprintForDescriptor(int descriptor,
+                                                             const QString &lexicalPath)
+{
+    struct stat metadata {};
+    int result = -1;
+    do {
+        result = ::fstat(descriptor, &metadata);
+    } while (result < 0 && errno == EINTR);
+    if (result < 0 || !S_ISDIR(metadata.st_mode)) {
+        return std::nullopt;
+    }
+    const QString canonicalPath = canonicalIdentityForDescriptor(descriptor);
+    if (canonicalPath.isEmpty()) {
+        return std::nullopt;
+    }
+    return DirectoryFingerprint{
+        .canonicalPath = canonicalPath,
+        .device = static_cast<quint64>(metadata.st_dev),
+        .inode = static_cast<quint64>(metadata.st_ino),
+        .symlinkParentPaths = symlinkParentPaths(lexicalPath),
+    };
+}
+
 CandidateInspection inspectCandidateAt(int directoryDescriptor,
                                        const LocatedProfileDirectory &directory,
                                        const QByteArray &encodedName,
@@ -282,6 +337,13 @@ EnumerationResult enumerateCandidates(const LocatedProfileDirectory &directory)
         return ProfileRepositoryError::UnreadableDirectory;
     }
 
+    const std::optional<DirectoryFingerprint> directoryFingerprint =
+        fingerprintForDescriptor(descriptor, directory.hostPath);
+    if (!directoryFingerprint.has_value()) {
+        ::close(descriptor);
+        return ProfileRepositoryError::UnreadableDirectory;
+    }
+
     DIR *stream = ::fdopendir(descriptor);
     if (stream == nullptr) {
         ::close(descriptor);
@@ -344,7 +406,10 @@ EnumerationResult enumerateCandidates(const LocatedProfileDirectory &directory)
         seenIdentities.insert(candidate.canonicalIdentity);
         candidates.append(std::move(candidate));
     }
-    return candidates;
+    return Enumeration{
+        .candidates = std::move(candidates),
+        .directoryFingerprint = *directoryFingerprint,
+    };
 }
 
 void normalizeRecord(ProfileParseResult &result,
@@ -368,6 +433,37 @@ QString profile_repository_detail::opaqueProfileId(QStringView instanceId,
         instanceId.toString(),
         canonicalIdentity.toString(),
     });
+}
+
+std::optional<DirectoryFingerprint> profile_repository_detail::inspectDirectory(
+    QStringView lexicalPath)
+{
+    const QString cleaned = QDir::cleanPath(lexicalPath.toString());
+    if (cleaned.isEmpty() || !QDir::isAbsolutePath(cleaned)) {
+        return std::nullopt;
+    }
+    QByteArray encodedPath = QFile::encodeName(cleaned);
+    int descriptor = -1;
+    do {
+        descriptor = ::open(encodedPath.constData(),
+                            O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_DIRECTORY);
+    } while (descriptor < 0 && errno == EINTR);
+    encodedPath.fill('\0');
+    if (descriptor < 0) {
+        return std::nullopt;
+    }
+    std::optional<DirectoryFingerprint> fingerprint =
+        fingerprintForDescriptor(descriptor, cleaned);
+    ::close(descriptor);
+    return fingerprint;
+}
+
+bool profile_repository_detail::directoryMatches(
+    QStringView lexicalPath, const DirectoryFingerprint &fingerprint)
+{
+    const std::optional<DirectoryFingerprint> current = inspectDirectory(lexicalPath);
+    return current.has_value() && current->canonicalPath == fingerprint.canonicalPath
+        && current->device == fingerprint.device && current->inode == fingerprint.inode;
 }
 
 ProfileRepository::ProfileRepository(ProfileParserFunction parser)
@@ -406,10 +502,12 @@ RepositoryLoadResult ProfileRepository::load(const RemminaInstance &instance)
     if (const auto *error = std::get_if<ProfileRepositoryError>(&enumeration)) {
         return *error;
     }
-    QList<Candidate> candidates = std::get<QList<Candidate>>(std::move(enumeration));
+    Enumeration enumerated = std::get<Enumeration>(std::move(enumeration));
+    QList<Candidate> candidates = std::move(enumerated.candidates);
 
     ProfileSnapshot snapshot;
     snapshot.directory = directory;
+    snapshot.directoryFingerprint = std::move(enumerated.directoryFingerprint);
     snapshot.profiles.reserve(candidates.size());
     snapshot.fingerprint.reserve(candidates.size());
     QSet<QString> activeCacheKeys;

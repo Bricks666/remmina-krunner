@@ -6,9 +6,13 @@
 #include "core/profile_catalog.h"
 
 #include <QDir>
+#include <QDateTime>
+#include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 
 #include <functional>
+#include <optional>
 #include <utility>
 
 namespace {
@@ -39,6 +43,14 @@ ProfileRecord makeRecord(QString opaqueId, QString name = {})
     };
 }
 
+ProfileRecord makeRecord(QString opaqueId, QString sourcePath, QString name)
+{
+    ProfileRecord record = makeRecord(std::move(opaqueId), std::move(name));
+    record.sourcePath = std::move(sourcePath);
+    record.launchPath = record.sourcePath;
+    return record;
+}
+
 FileFingerprint makeFingerprint(QString path)
 {
     return {
@@ -58,12 +70,29 @@ LocatedProfileDirectory located(QString hostPath)
 
 ProfileSnapshot makeSnapshot(QList<ProfileRecord> profiles,
                              QList<FileFingerprint> fingerprint,
-                             LocatedProfileDirectory directory)
+                             LocatedProfileDirectory directory,
+                             DirectoryFingerprint directoryFingerprint = {})
 {
+    if (directoryFingerprint.canonicalPath.isEmpty()
+        && !directory.hostPath.isEmpty()) {
+        const std::optional<DirectoryFingerprint> inspected =
+            profile_repository_detail::inspectDirectory(directory.hostPath);
+        if (inspected.has_value()) {
+            directoryFingerprint = *inspected;
+        } else {
+            directoryFingerprint = {
+                .canonicalPath = QDir::cleanPath(directory.hostPath),
+                .device = 1,
+                .inode = 1,
+                .symlinkParentPaths = {},
+            };
+        }
+    }
     return {
         .profiles = std::move(profiles),
         .fingerprint = std::move(fingerprint),
         .directory = std::move(directory),
+        .directoryFingerprint = std::move(directoryFingerprint),
     };
 }
 
@@ -97,8 +126,11 @@ public:
         if (beforeLoad) {
             beforeLoad(instance);
         }
-        if (nextResult_ >= results.size()) {
+        if (results.isEmpty()) {
             qFatal("Unexpected repository load");
+        }
+        if (nextResult_ >= results.size()) {
+            return results.constLast();
         }
         return results.at(nextResult_++);
     }
@@ -118,11 +150,21 @@ public:
         replacements.append(requestedPaths);
         const bool success = nextResult_ >= replaceResults.size()
             || replaceResults.at(nextResult_++);
+        if (callback) {
+            retiredCallbacks.append(callback);
+        }
         paths.clear();
         callback = {};
         if (success) {
             paths = requestedPaths;
             callback = std::move(changed);
+            if (invokeRetiredAfterReplace && !retiredCallbacks.isEmpty()) {
+                retiredCallbacks.constLast()();
+            }
+            if (synchronousChangesRemaining > 0) {
+                --synchronousChangesRemaining;
+                callback();
+            }
         }
         return success;
     }
@@ -143,13 +185,55 @@ public:
 
     QList<bool> replaceResults;
     QList<QStringList> replacements;
+    QList<ChangedCallback> retiredCallbacks;
     QStringList paths;
     ChangedCallback callback;
     int clearCount = 0;
+    int synchronousChangesRemaining = 0;
+    bool invokeRetiredAfterReplace = false;
 
 private:
     qsizetype nextResult_ = 0;
 };
+
+QString writeBytes(const QString &path, QByteArray contents = QByteArray("profile"))
+{
+    if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+        qFatal("Unable to create catalog test directory");
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+        || file.write(contents) != contents.size()) {
+        qFatal("Unable to create catalog test file");
+    }
+    return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+}
+
+ProfileSnapshot resolvableSnapshot(QStringView instanceId,
+                                   const QString &directory,
+                                   const QString &sourcePath,
+                                   QString name = QStringLiteral("record"))
+{
+    const QString canonicalSource = QFileInfo(sourcePath).canonicalFilePath();
+    if (canonicalSource.isEmpty()) {
+        qFatal("Catalog test source lacks a canonical identity");
+    }
+    const std::optional<DirectoryFingerprint> identity =
+        profile_repository_detail::inspectDirectory(directory);
+    if (!identity.has_value()) {
+        qFatal("Catalog test directory lacks an identity");
+    }
+    const QString opaqueId = profile_repository_detail::opaqueProfileId(
+        instanceId, QStringView(canonicalSource));
+    const QFileInfo metadata(canonicalSource);
+    return makeSnapshot(
+        {makeRecord(opaqueId, sourcePath, std::move(name))},
+        {{.path = canonicalSource,
+          .size = metadata.size(),
+          .modifiedMilliseconds = metadata.lastModified().toMSecsSinceEpoch()}},
+        located(directory),
+        *identity);
+}
 
 } // namespace
 
@@ -158,19 +242,27 @@ class ProfileCatalogTest : public QObject {
 
 private slots:
     void constructorIsLazyAndDestructorClearsWatcher();
-    void firstLookupLoadsOnceAndWatchesCompleteDeterministicSet();
-    void sameSessionReusesRecordsAcrossLookupsAndResolve();
+    void firstLookupLoadsVerifiesAndWatchesCompleteDeterministicSet();
+    void sameSessionReusesRecordsAcrossLookups();
     void explicitDirtyDefersReloadUntilNextLookup();
     void watcherCallbackDefersReloadAndReplacesCurrentIds();
     void endSessionForcesRepositoryVerificationEvenWhenClean();
     void instanceSwitchClearsOldStateBeforeLoadingNewScope();
     void resetClearsStateAndRemainsLazy();
     void repositoryErrorsClearStateMapExactlyAndRetry();
+    void repositoryErrorDuringVerificationClearsStateAndRetries();
     void emptySnapshotStillWatchesSelectedDirectory();
     void watcherSetupFailureServesFreshRecordsAndRetriesUntilSafe();
     void snapshotProvenanceWinsWhenInstanceNowPointsElsewhere();
     void invalidSnapshotProvenanceServesFreshRecordsAndRetriesUntilSafe();
-    void resolveUsesOnlyCurrentRecordsAndChoosesFirstDuplicate();
+    void handoffMutationInstallsAndVerifiesNewSnapshot();
+    void repeatedHandoffMutationStaysDirtyAndRetries();
+    void synchronousWatcherCallbacksCannotBeOverwrittenClean();
+    void retiredWatcherCallbackCannotDirtyReplacement();
+    void staleCallbackAfterResetAndDestructionIsInert();
+    void removesEmptyAndEveryDuplicateOpaqueId();
+    void resolveRejectsRemovedAndRetargetedSourceWithoutLoading();
+    void resolveRejectsRetargetedDirectoryWithoutLoading();
 };
 
 void ProfileCatalogTest::constructorIsLazyAndDestructorClearsWatcher()
@@ -192,7 +284,7 @@ void ProfileCatalogTest::constructorIsLazyAndDestructorClearsWatcher()
     QVERIFY(!watcher.callback);
 }
 
-void ProfileCatalogTest::firstLookupLoadsOnceAndWatchesCompleteDeterministicSet()
+void ProfileCatalogTest::firstLookupLoadsVerifiesAndWatchesCompleteDeterministicSet()
 {
     FakeRepository repository;
     repository.results = {makeSnapshot(
@@ -203,7 +295,15 @@ void ProfileCatalogTest::firstLookupLoadsOnceAndWatchesCompleteDeterministicSet(
             makeFingerprint(QStringLiteral("/profiles/selected/a.remmina")),
             makeFingerprint(QStringLiteral("/profiles/selected/malformed.remmina")),
         },
-        located(QStringLiteral("/profiles/selected/./")))};
+        located(QStringLiteral("/profiles/selected/./")),
+        {.canonicalPath = QStringLiteral("/profiles/selected"),
+         .device = 1,
+         .inode = 2,
+         .symlinkParentPaths = {
+             QStringLiteral("/profiles/parents/z"),
+             QStringLiteral("/profiles/parents/a"),
+             QStringLiteral("/profiles/parents/z"),
+         }})};
     FakeWatcher watcher;
     ProfileCatalog catalog(repository, watcher);
     const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
@@ -211,18 +311,20 @@ void ProfileCatalogTest::firstLookupLoadsOnceAndWatchesCompleteDeterministicSet(
     const QList<ProfileRecord> records = requireRecords(catalog.records(instance));
 
     QCOMPARE(records.size(), 1);
-    QCOMPARE(repository.calls, QStringList{instance.id});
+    QCOMPARE(repository.calls, QStringList({instance.id, instance.id}));
     QCOMPARE(watcher.replacements.size(), 1);
     QCOMPARE(watcher.paths,
              QStringList({
                  QStringLiteral("/profiles/selected"),
+                 QStringLiteral("/profiles/parents/a"),
+                 QStringLiteral("/profiles/parents/z"),
                  QStringLiteral("/profiles/selected/a.remmina"),
                  QStringLiteral("/profiles/selected/malformed.remmina"),
                  QStringLiteral("/profiles/selected/z.remmina"),
              }));
 }
 
-void ProfileCatalogTest::sameSessionReusesRecordsAcrossLookupsAndResolve()
+void ProfileCatalogTest::sameSessionReusesRecordsAcrossLookups()
 {
     FakeRepository repository;
     repository.results = {makeSnapshot({makeRecord(QStringLiteral("one"))},
@@ -235,11 +337,9 @@ void ProfileCatalogTest::sameSessionReusesRecordsAcrossLookupsAndResolve()
     requireRecords(catalog.records(instance));
     requireRecords(catalog.records(instance));
 
-    QCOMPARE(repository.calls.size(), 1);
+    QCOMPARE(repository.calls.size(), 2);
     QCOMPARE(watcher.replacements.size(), 1);
-    QVERIFY(catalog.resolve(u"one") != nullptr);
-    QCOMPARE(catalog.resolve(u"one")->opaqueId, QStringLiteral("one"));
-    QCOMPARE(repository.calls.size(), 1);
+    QCOMPARE(repository.calls.size(), 2);
 }
 
 void ProfileCatalogTest::explicitDirtyDefersReloadUntilNextLookup()
@@ -247,6 +347,10 @@ void ProfileCatalogTest::explicitDirtyDefersReloadUntilNextLookup()
     FakeRepository repository;
     repository.results = {
         makeSnapshot({makeRecord(QStringLiteral("one"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("one"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("two"))},
                      located(QStringLiteral("/profiles/one"))),
         makeSnapshot({makeRecord(QStringLiteral("two"))},
                      located(QStringLiteral("/profiles/one"))),
@@ -258,10 +362,10 @@ void ProfileCatalogTest::explicitDirtyDefersReloadUntilNextLookup()
 
     catalog.markDirty();
 
-    QCOMPARE(repository.calls.size(), 1);
-    QVERIFY(catalog.resolve(u"one") != nullptr);
-    const QList<ProfileRecord> reloaded = requireRecords(catalog.records(instance));
     QCOMPARE(repository.calls.size(), 2);
+    QVERIFY(catalog.resolve(u"one") == nullptr);
+    const QList<ProfileRecord> reloaded = requireRecords(catalog.records(instance));
+    QCOMPARE(repository.calls.size(), 4);
     QCOMPARE(reloaded.constFirst().opaqueId, QStringLiteral("two"));
 }
 
@@ -270,6 +374,10 @@ void ProfileCatalogTest::watcherCallbackDefersReloadAndReplacesCurrentIds()
     FakeRepository repository;
     repository.results = {
         makeSnapshot({makeRecord(QStringLiteral("stale"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("stale"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("fresh"))},
                      located(QStringLiteral("/profiles/one"))),
         makeSnapshot({makeRecord(QStringLiteral("fresh"))},
                      located(QStringLiteral("/profiles/one"))),
@@ -281,12 +389,12 @@ void ProfileCatalogTest::watcherCallbackDefersReloadAndReplacesCurrentIds()
 
     watcher.trigger();
 
-    QCOMPARE(repository.calls.size(), 1);
-    QVERIFY(catalog.resolve(u"stale") != nullptr);
-    requireRecords(catalog.records(instance));
     QCOMPARE(repository.calls.size(), 2);
     QVERIFY(catalog.resolve(u"stale") == nullptr);
-    QVERIFY(catalog.resolve(u"fresh") != nullptr);
+    const QList<ProfileRecord> reloaded = requireRecords(catalog.records(instance));
+    QCOMPARE(repository.calls.size(), 4);
+    QCOMPARE(reloaded.constFirst().opaqueId, QStringLiteral("fresh"));
+    QVERIFY(catalog.resolve(u"stale") == nullptr);
 }
 
 void ProfileCatalogTest::endSessionForcesRepositoryVerificationEvenWhenClean()
@@ -305,11 +413,10 @@ void ProfileCatalogTest::endSessionForcesRepositoryVerificationEvenWhenClean()
 
     catalog.endSession();
 
-    QCOMPARE(repository.calls.size(), 1);
-    QVERIFY(catalog.resolve(u"unchanged") != nullptr);
-    requireRecords(catalog.records(instance));
-    requireRecords(catalog.records(instance));
     QCOMPARE(repository.calls.size(), 2);
+    requireRecords(catalog.records(instance));
+    requireRecords(catalog.records(instance));
+    QCOMPARE(repository.calls.size(), 4);
     QCOMPARE(watcher.replacements.size(), 2);
 }
 
@@ -319,6 +426,10 @@ void ProfileCatalogTest::instanceSwitchClearsOldStateBeforeLoadingNewScope()
     repository.results = {
         makeSnapshot({makeRecord(QStringLiteral("old"))},
                      located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("old"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("new"))},
+                     located(QStringLiteral("/profiles/two"))),
         makeSnapshot({makeRecord(QStringLiteral("new"))},
                      located(QStringLiteral("/profiles/two"))),
     };
@@ -328,8 +439,9 @@ void ProfileCatalogTest::instanceSwitchClearsOldStateBeforeLoadingNewScope()
     const RemminaInstance second = makeInstance(QStringLiteral("native:two"));
     requireRecords(catalog.records(first));
     bool oldStateWasClearedBeforeSecondLoad = false;
+    int secondLoadCount = 0;
     repository.beforeLoad = [&](const RemminaInstance &instance) {
-        if (instance.id == second.id) {
+        if (instance.id == second.id && secondLoadCount++ == 0) {
             oldStateWasClearedBeforeSecondLoad = watcher.paths.isEmpty()
                 && catalog.resolve(u"old") == nullptr;
         }
@@ -338,9 +450,8 @@ void ProfileCatalogTest::instanceSwitchClearsOldStateBeforeLoadingNewScope()
     requireRecords(catalog.records(second));
 
     QVERIFY(oldStateWasClearedBeforeSecondLoad);
-    QCOMPARE(repository.calls, QStringList({first.id, second.id}));
+    QCOMPARE(repository.calls, QStringList({first.id, first.id, second.id, second.id}));
     QVERIFY(catalog.resolve(u"old") == nullptr);
-    QVERIFY(catalog.resolve(u"new") != nullptr);
     QCOMPARE(watcher.paths.constFirst(), QStringLiteral("/profiles/two"));
 }
 
@@ -349,6 +460,10 @@ void ProfileCatalogTest::resetClearsStateAndRemainsLazy()
     FakeRepository repository;
     repository.results = {
         makeSnapshot({makeRecord(QStringLiteral("before"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("before"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("after"))},
                      located(QStringLiteral("/profiles/one"))),
         makeSnapshot({makeRecord(QStringLiteral("after"))},
                      located(QStringLiteral("/profiles/one"))),
@@ -360,12 +475,11 @@ void ProfileCatalogTest::resetClearsStateAndRemainsLazy()
 
     catalog.reset();
 
-    QCOMPARE(repository.calls.size(), 1);
+    QCOMPARE(repository.calls.size(), 2);
     QVERIFY(catalog.resolve(u"before") == nullptr);
     QVERIFY(watcher.paths.isEmpty());
     requireRecords(catalog.records(instance));
-    QCOMPARE(repository.calls.size(), 2);
-    QVERIFY(catalog.resolve(u"after") != nullptr);
+    QCOMPARE(repository.calls.size(), 4);
 }
 
 void ProfileCatalogTest::repositoryErrorsClearStateMapExactlyAndRetry()
@@ -382,7 +496,11 @@ void ProfileCatalogTest::repositoryErrorsClearStateMapExactlyAndRetry()
         repository.results = {
             makeSnapshot({makeRecord(QStringLiteral("stale"))},
                          located(QStringLiteral("/profiles/one"))),
+            makeSnapshot({makeRecord(QStringLiteral("stale"))},
+                         located(QStringLiteral("/profiles/one"))),
             repositoryError,
+            makeSnapshot({makeRecord(QStringLiteral("recovered"))},
+                         located(QStringLiteral("/profiles/one"))),
             makeSnapshot({makeRecord(QStringLiteral("recovered"))},
                          located(QStringLiteral("/profiles/one"))),
         };
@@ -397,11 +515,38 @@ void ProfileCatalogTest::repositoryErrorsClearStateMapExactlyAndRetry()
         QCOMPARE(requireError(failed), catalogError);
         QVERIFY(catalog.resolve(u"stale") == nullptr);
         QVERIFY(watcher.paths.isEmpty());
-        QCOMPARE(repository.calls.size(), 2);
-        requireRecords(catalog.records(instance));
         QCOMPARE(repository.calls.size(), 3);
-        QVERIFY(catalog.resolve(u"recovered") != nullptr);
+        requireRecords(catalog.records(instance));
+        QCOMPARE(repository.calls.size(), 5);
     }
+}
+
+void ProfileCatalogTest::repositoryErrorDuringVerificationClearsStateAndRetries()
+{
+    const ProfileSnapshot fresh = makeSnapshot(
+        {makeRecord(QStringLiteral("fresh"))}, located(QStringLiteral("/profiles/one")));
+    const ProfileSnapshot recovered = makeSnapshot(
+        {makeRecord(QStringLiteral("recovered"))}, located(QStringLiteral("/profiles/one")));
+    FakeRepository repository;
+    repository.results = {
+        fresh,
+        ProfileRepositoryError::UnreadableDirectory,
+        recovered,
+        recovered,
+    };
+    FakeWatcher watcher;
+    ProfileCatalog catalog(repository, watcher);
+    const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+
+    const CatalogResult failed = catalog.records(instance);
+
+    QCOMPARE(requireError(failed), ProfileCatalogError::UnreadableDirectory);
+    QVERIFY(watcher.paths.isEmpty());
+    QVERIFY(catalog.resolve(u"fresh") == nullptr);
+    QCOMPARE(repository.calls.size(), 2);
+    const QList<ProfileRecord> records = requireRecords(catalog.records(instance));
+    QCOMPARE(records.constFirst().opaqueId, QStringLiteral("recovered"));
+    QCOMPARE(repository.calls.size(), 4);
 }
 
 void ProfileCatalogTest::emptySnapshotStillWatchesSelectedDirectory()
@@ -415,6 +560,7 @@ void ProfileCatalogTest::emptySnapshotStillWatchesSelectedDirectory()
         requireRecords(catalog.records(makeInstance(QStringLiteral("native:empty"))));
 
     QVERIFY(records.isEmpty());
+    QCOMPARE(repository.calls.size(), 2);
     QCOMPARE(watcher.paths, QStringList{QStringLiteral("/profiles/empty")});
 }
 
@@ -434,14 +580,14 @@ void ProfileCatalogTest::watcherSetupFailureServesFreshRecordsAndRetriesUntilSaf
 
     const QList<ProfileRecord> first = requireRecords(catalog.records(instance));
     QCOMPARE(first.constFirst().opaqueId, QStringLiteral("first"));
-    QVERIFY(catalog.resolve(u"first") != nullptr);
+    QVERIFY(catalog.resolve(u"first") == nullptr);
     QVERIFY(watcher.paths.isEmpty());
 
     const QList<ProfileRecord> second = requireRecords(catalog.records(instance));
     QCOMPARE(second.constFirst().opaqueId, QStringLiteral("second"));
-    QCOMPARE(repository.calls.size(), 2);
+    QCOMPARE(repository.calls.size(), 3);
     requireRecords(catalog.records(instance));
-    QCOMPARE(repository.calls.size(), 2);
+    QCOMPARE(repository.calls.size(), 3);
     QCOMPARE(watcher.replacements.size(), 2);
 }
 
@@ -470,7 +616,7 @@ void ProfileCatalogTest::snapshotProvenanceWinsWhenInstanceNowPointsElsewhere()
 
     QCOMPARE(watcher.paths, QStringList({loadedDirectory, loadedProfile}));
     QVERIFY(!watcher.paths.contains(currentDirectory));
-    QCOMPARE(repository.calls.size(), 1);
+    QCOMPARE(repository.calls.size(), 2);
 }
 
 void ProfileCatalogTest::invalidSnapshotProvenanceServesFreshRecordsAndRetriesUntilSafe()
@@ -492,29 +638,222 @@ void ProfileCatalogTest::invalidSnapshotProvenanceServesFreshRecordsAndRetriesUn
 
     const QList<ProfileRecord> second = requireRecords(catalog.records(instance));
     QCOMPARE(second.constFirst().opaqueId, QStringLiteral("second"));
-    QCOMPARE(repository.calls.size(), 2);
+    QCOMPARE(repository.calls.size(), 3);
     QCOMPARE(watcher.replacements.size(), 1);
     requireRecords(catalog.records(instance));
+    QCOMPARE(repository.calls.size(), 3);
+}
+
+void ProfileCatalogTest::handoffMutationInstallsAndVerifiesNewSnapshot()
+{
+    const ProfileSnapshot a = makeSnapshot(
+        {makeRecord(QStringLiteral("a"))},
+        {makeFingerprint(QStringLiteral("/profiles/a/profile.remmina"))},
+        located(QStringLiteral("/profiles/a")));
+    const ProfileSnapshot b = makeSnapshot(
+        {makeRecord(QStringLiteral("b"))},
+        {makeFingerprint(QStringLiteral("/profiles/b/profile.remmina"))},
+        located(QStringLiteral("/profiles/b")));
+    FakeRepository repository;
+    repository.results = {a, b, b};
+    FakeWatcher watcher;
+    ProfileCatalog catalog(repository, watcher);
+
+    const QList<ProfileRecord> records =
+        requireRecords(catalog.records(makeInstance(QStringLiteral("native:one"))));
+
+    QCOMPARE(records.size(), 1);
+    QCOMPARE(records.constFirst().opaqueId, QStringLiteral("b"));
+    QCOMPARE(repository.calls.size(), 3);
+    QCOMPARE(watcher.replacements.size(), 2);
+    QCOMPARE(watcher.paths.constFirst(), QStringLiteral("/profiles/b"));
+}
+
+void ProfileCatalogTest::repeatedHandoffMutationStaysDirtyAndRetries()
+{
+    const ProfileSnapshot a = makeSnapshot({makeRecord(QStringLiteral("a"))},
+                                           located(QStringLiteral("/profiles/a")));
+    const ProfileSnapshot b = makeSnapshot({makeRecord(QStringLiteral("b"))},
+                                           located(QStringLiteral("/profiles/b")));
+    const ProfileSnapshot c = makeSnapshot({makeRecord(QStringLiteral("c"))},
+                                           located(QStringLiteral("/profiles/c")));
+    FakeRepository repository;
+    repository.results = {a, b, c};
+    FakeWatcher watcher;
+    ProfileCatalog catalog(repository, watcher);
+    const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+
+    const QList<ProfileRecord> first = requireRecords(catalog.records(instance));
+
+    QCOMPARE(first.constFirst().opaqueId, QStringLiteral("c"));
+    QCOMPARE(repository.calls.size(), 3);
+    QCOMPARE(watcher.replacements.size(), 2);
+    QVERIFY(watcher.paths.isEmpty());
+    QVERIFY(catalog.resolve(u"c") == nullptr);
+
+    requireRecords(catalog.records(instance));
+    QCOMPARE(repository.calls.size(), 5);
+    QCOMPARE(watcher.replacements.size(), 3);
+}
+
+void ProfileCatalogTest::synchronousWatcherCallbacksCannotBeOverwrittenClean()
+{
+    const ProfileSnapshot snapshot = makeSnapshot(
+        {makeRecord(QStringLiteral("record"))}, located(QStringLiteral("/profiles/one")));
+    FakeRepository repository;
+    repository.results = {snapshot};
+    FakeWatcher watcher;
+    watcher.synchronousChangesRemaining = 1;
+    ProfileCatalog catalog(repository, watcher);
+    const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+
+    requireRecords(catalog.records(instance));
+
+    QCOMPARE(repository.calls.size(), 2);
+    QCOMPARE(watcher.replacements.size(), 1);
+    QVERIFY(watcher.paths.isEmpty());
+    QVERIFY(catalog.resolve(u"record") == nullptr);
+    requireRecords(catalog.records(instance));
+    QCOMPARE(repository.calls.size(), 4);
+}
+
+void ProfileCatalogTest::retiredWatcherCallbackCannotDirtyReplacement()
+{
+    const ProfileSnapshot a = makeSnapshot({makeRecord(QStringLiteral("a"))},
+                                           located(QStringLiteral("/profiles/a")));
+    const ProfileSnapshot b = makeSnapshot({makeRecord(QStringLiteral("b"))},
+                                           located(QStringLiteral("/profiles/b")));
+    FakeRepository repository;
+    repository.results = {a, b, b};
+    FakeWatcher watcher;
+    watcher.invokeRetiredAfterReplace = true;
+    ProfileCatalog catalog(repository, watcher);
+    const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+
+    requireRecords(catalog.records(instance));
+    const qsizetype callsAfterHandoff = repository.calls.size();
+    requireRecords(catalog.records(instance));
+
+    QCOMPARE(callsAfterHandoff, 3);
+    QCOMPARE(repository.calls.size(), callsAfterHandoff);
+    QCOMPARE(watcher.paths.constFirst(), QStringLiteral("/profiles/b"));
+}
+
+void ProfileCatalogTest::staleCallbackAfterResetAndDestructionIsInert()
+{
+    const ProfileSnapshot snapshot = makeSnapshot(
+        {makeRecord(QStringLiteral("record"))}, located(QStringLiteral("/profiles/one")));
+    FakeRepository repository;
+    repository.results = {snapshot};
+    FakeWatcher watcher;
+    ProfileWatcher::ChangedCallback stale;
+    {
+        ProfileCatalog catalog(repository, watcher);
+        requireRecords(catalog.records(makeInstance(QStringLiteral("native:one"))));
+        stale = watcher.callback;
+        catalog.reset();
+        stale();
+        QCOMPARE(repository.calls.size(), 2);
+    }
+
+    stale();
     QCOMPARE(repository.calls.size(), 2);
 }
 
-void ProfileCatalogTest::resolveUsesOnlyCurrentRecordsAndChoosesFirstDuplicate()
+void ProfileCatalogTest::removesEmptyAndEveryDuplicateOpaqueId()
 {
+    const ProfileSnapshot snapshot = makeSnapshot(
+        {
+            makeRecord({}, QStringLiteral("empty")),
+            makeRecord(QStringLiteral("duplicate"), QStringLiteral("first")),
+            makeRecord(QStringLiteral("unique"), QStringLiteral("kept")),
+            makeRecord(QStringLiteral("duplicate"), QStringLiteral("second")),
+        },
+        located(QStringLiteral("/profiles/one")));
     FakeRepository repository;
+    repository.results = {snapshot};
+    FakeWatcher watcher;
+    ProfileCatalog catalog(repository, watcher);
+
+    const QList<ProfileRecord> records =
+        requireRecords(catalog.records(makeInstance(QStringLiteral("native:one"))));
+
+    QCOMPARE(records.size(), 1);
+    QCOMPARE(records.constFirst().opaqueId, QStringLiteral("unique"));
+    QVERIFY(catalog.resolve(u"duplicate") == nullptr);
+    QCOMPARE(watcher.paths, QStringList{QStringLiteral("/profiles/one")});
+}
+
+void ProfileCatalogTest::resolveRejectsRemovedAndRetargetedSourceWithoutLoading()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString directory = QDir(temporary.path()).filePath(QStringLiteral("profiles"));
+    const QString removable = writeBytes(QDir(directory).filePath(QStringLiteral("remove.remmina")));
+    const QString firstTarget = writeBytes(QDir(directory).filePath(QStringLiteral("first.target")));
+    const QString secondTarget = writeBytes(QDir(directory).filePath(QStringLiteral("second.target")));
+    const QString alias = QDir(directory).filePath(QStringLiteral("alias.remmina"));
+    QVERIFY(QFile::link(firstTarget, alias));
+    const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+    FakeRepository repository;
+    const ProfileSnapshot removableSnapshot =
+        resolvableSnapshot(instance.id, directory, removable);
+    const ProfileSnapshot aliasSnapshot =
+        resolvableSnapshot(instance.id, directory, alias);
     repository.results = {
-        makeSnapshot({makeRecord(QStringLiteral("duplicate"), QStringLiteral("first")),
-                      makeRecord(QStringLiteral("duplicate"), QStringLiteral("second"))},
-                     located(QStringLiteral("/profiles/one"))),
+        removableSnapshot,
+        removableSnapshot,
+        aliasSnapshot,
+        aliasSnapshot,
     };
     FakeWatcher watcher;
     ProfileCatalog catalog(repository, watcher);
 
-    QVERIFY(catalog.resolve(u"duplicate") == nullptr);
-    requireRecords(catalog.records(makeInstance(QStringLiteral("native:one"))));
-    const ProfileRecord *resolved = catalog.resolve(u"duplicate");
-    QVERIFY(resolved != nullptr);
-    QCOMPARE(resolved->name, QStringLiteral("first"));
-    QVERIFY(catalog.resolve(u"missing") == nullptr);
+    const QList<ProfileRecord> removableRecords = requireRecords(catalog.records(instance));
+    const QString removableId = removableRecords.constFirst().opaqueId;
+    QCOMPARE(repository.calls.size(), 2);
+    QVERIFY(catalog.resolve(QStringView(removableId)) != nullptr);
+    QVERIFY(QFile::remove(removable));
+    QVERIFY(catalog.resolve(QStringView(removableId)) == nullptr);
+    QCOMPARE(repository.calls.size(), 2);
+
+    catalog.markDirty();
+    const QList<ProfileRecord> aliasedRecords = requireRecords(catalog.records(instance));
+    const QString aliasId = aliasedRecords.constFirst().opaqueId;
+    QVERIFY(catalog.resolve(QStringView(aliasId)) != nullptr);
+    QVERIFY(QFile::remove(alias));
+    QVERIFY(QFile::link(secondTarget, alias));
+    QVERIFY(catalog.resolve(QStringView(aliasId)) == nullptr);
+    QCOMPARE(repository.calls.size(), 4);
+}
+
+void ProfileCatalogTest::resolveRejectsRetargetedDirectoryWithoutLoading()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString root = QDir(temporary.path()).filePath(QStringLiteral("snap"));
+    const QString firstDirectory = QDir(root).filePath(QStringLiteral("42/profiles"));
+    const QString secondDirectory = QDir(root).filePath(QStringLiteral("43/profiles"));
+    const QString firstSource = writeBytes(QDir(firstDirectory).filePath(QStringLiteral("one.remmina")));
+    writeBytes(QDir(secondDirectory).filePath(QStringLiteral("one.remmina")));
+    const QString current = QDir(root).filePath(QStringLiteral("current"));
+    QVERIFY(QFile::link(QDir(root).filePath(QStringLiteral("42")), current));
+    const QString lexicalDirectory = QDir(current).filePath(QStringLiteral("profiles"));
+    const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+    ProfileSnapshot snapshot = resolvableSnapshot(
+        instance.id, lexicalDirectory, firstSource, QStringLiteral("one"));
+    FakeRepository repository;
+    repository.results = {snapshot};
+    FakeWatcher watcher;
+    ProfileCatalog catalog(repository, watcher);
+
+    const QList<ProfileRecord> records = requireRecords(catalog.records(instance));
+    const QString opaqueId = records.constFirst().opaqueId;
+    QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+    QVERIFY(QFile::remove(current));
+    QVERIFY(QFile::link(QDir(root).filePath(QStringLiteral("43")), current));
+    QVERIFY(catalog.resolve(QStringView(opaqueId)) == nullptr);
+    QCOMPARE(repository.calls.size(), 2);
 }
 
 QTEST_GUILESS_MAIN(ProfileCatalogTest)

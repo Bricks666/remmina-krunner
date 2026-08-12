@@ -83,6 +83,24 @@ RemminaInstance flatpakInstance(const QString &root)
     };
 }
 
+RemminaInstance snapInstance(const QString &root)
+{
+    const QString base = root + QStringLiteral("/home/tester/snap/remmina/current");
+    return {
+        .id = QStringLiteral("snap:test"),
+        .kind = InstanceKind::Snap,
+        .displayName = QStringLiteral("Snap"),
+        .executable = QStringLiteral("remmina"),
+        .launcherPrefix = {},
+        .profiles = {
+            .configHome = base + QStringLiteral("/.config"),
+            .dataHome = base + QStringLiteral("/.local/share"),
+            .legacyHome = base + QStringLiteral("/.remmina"),
+            .systemDataHomes = {},
+        },
+    };
+}
+
 QString profileDirectory(const RemminaInstance &instance)
 {
     return instance.profiles.dataHome + QStringLiteral("/remmina");
@@ -139,6 +157,7 @@ private slots:
     void skipsEveryParserErrorAndFingerprintsFailedProfiles();
     void defaultParserLoadsValidAndSkipsMalformedProfiles();
     void returnsEmptySnapshotForReadableEmptyDirectory();
+    void capturesSnapDirectoryIdentityAndSymlinkParent();
     void transientUnreadableParseErrorRetriesWithoutFingerprintChange();
     void equalSizeReplacementWithSamePublicMtimeReparses();
     void parserMutationCannotPoisonCacheOrOpaqueIdentity();
@@ -186,6 +205,11 @@ void ProfileRepositoryTest::filtersSuffixAndFileTypesSortsAndDeduplicatesAliases
     QCOMPARE(snapshot.fingerprint.size(), 2);
     QCOMPARE(snapshot.directory.hostPath, directory);
     QCOMPARE(snapshot.directory.launchPath, directory);
+    QVERIFY(!snapshot.directoryFingerprint.canonicalPath.isEmpty());
+    QVERIFY(snapshot.directoryFingerprint.device != 0);
+    QVERIFY(snapshot.directoryFingerprint.inode != 0);
+    QVERIFY(profile_repository_detail::directoryMatches(
+        snapshot.directory.hostPath, snapshot.directoryFingerprint));
     QCOMPARE(snapshot.fingerprint.at(1).path, QFileInfo(zTarget).canonicalFilePath());
     QVERIFY(!snapshot.fingerprint.at(0).path.endsWith(QStringLiteral("upper.REMMINA")));
 }
@@ -213,6 +237,8 @@ void ProfileRepositoryTest::passesFlatpakHostAndLaunchPathsAndOpaqueIdsToParser(
     QCOMPARE(snapshot.profiles.constFirst().opaqueId, calls.constFirst().opaqueId);
     QCOMPARE(snapshot.directory.hostPath, directory);
     QCOMPARE(snapshot.directory.launchPath, directory);
+    QVERIFY(profile_repository_detail::directoryMatches(
+        snapshot.directory.hostPath, snapshot.directoryFingerprint));
 }
 
 void ProfileRepositoryTest::skipsEveryParserErrorAndFingerprintsFailedProfiles()
@@ -286,6 +312,32 @@ void ProfileRepositoryTest::returnsEmptySnapshotForReadableEmptyDirectory()
     QVERIFY(snapshot.fingerprint.isEmpty());
     QCOMPARE(snapshot.directory.hostPath, directory);
     QCOMPARE(snapshot.directory.launchPath, directory);
+    QVERIFY(profile_repository_detail::directoryMatches(
+        snapshot.directory.hostPath, snapshot.directoryFingerprint));
+}
+
+void ProfileRepositoryTest::capturesSnapDirectoryIdentityAndSymlinkParent()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString snapRoot = makeDirectory(
+        temporary.path() + QStringLiteral("/home/tester/snap/remmina"));
+    const QString revision = makeDirectory(QDir(snapRoot).filePath(QStringLiteral("42")));
+    const QString current = QDir(snapRoot).filePath(QStringLiteral("current"));
+    QVERIFY(QFile::link(revision, current));
+    const RemminaInstance instance = snapInstance(temporary.path());
+    const QString directory = makeDirectory(profileDirectory(instance));
+    writeProfile(directory, u"snap.remmina");
+
+    ProfileRepository repository;
+    const ProfileSnapshot snapshot = snapshotFrom(repository.load(instance));
+
+    QCOMPARE(snapshot.directory.hostPath, directory);
+    QCOMPARE(snapshot.directoryFingerprint.canonicalPath,
+             QFileInfo(directory).canonicalFilePath());
+    QVERIFY(snapshot.directoryFingerprint.symlinkParentPaths.contains(snapRoot));
+    QVERIFY(profile_repository_detail::directoryMatches(
+        snapshot.directory.hostPath, snapshot.directoryFingerprint));
 }
 
 void ProfileRepositoryTest::equalSizeReplacementWithSamePublicMtimeReparses()

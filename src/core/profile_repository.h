@@ -9,9 +9,11 @@
 #include <QHash>
 #include <QList>
 #include <QString>
+#include <QStringList>
 #include <QStringView>
 
 #include <functional>
+#include <optional>
 #include <variant>
 
 struct FileFingerprint {
@@ -20,10 +22,18 @@ struct FileFingerprint {
     qint64 modifiedMilliseconds;
 };
 
+struct DirectoryFingerprint {
+    QString canonicalPath;
+    quint64 device = 0;
+    quint64 inode = 0;
+    QStringList symlinkParentPaths;
+};
+
 struct ProfileSnapshot {
     QList<ProfileRecord> profiles;
     QList<FileFingerprint> fingerprint;
     LocatedProfileDirectory directory;
+    DirectoryFingerprint directoryFingerprint;
 };
 
 enum class ProfileRepositoryError {
@@ -38,6 +48,7 @@ using ProfileParserFunction =
 
 class ProfileRepositorySource {
 public:
+    // Repository sources are confined to the thread that owns their catalog.
     virtual ~ProfileRepositorySource() = default;
     [[nodiscard]] virtual RepositoryLoadResult load(const RemminaInstance &instance) = 0;
 };
@@ -45,6 +56,9 @@ public:
 namespace profile_repository_detail {
 
 [[nodiscard]] QString opaqueProfileId(QStringView instanceId, QStringView canonicalIdentity);
+[[nodiscard]] std::optional<DirectoryFingerprint> inspectDirectory(QStringView lexicalPath);
+[[nodiscard]] bool directoryMatches(QStringView lexicalPath,
+                                    const DirectoryFingerprint &fingerprint);
 
 } // namespace profile_repository_detail
 

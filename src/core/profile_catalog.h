@@ -10,6 +10,7 @@
 #include <QString>
 #include <QStringView>
 
+#include <memory>
 #include <variant>
 
 enum class ProfileCatalogError {
@@ -21,7 +22,8 @@ using CatalogResult = std::variant<QList<ProfileRecord>, ProfileCatalogError>;
 
 class ProfileCatalog {
 public:
-    // Dependencies are non-owning and must outlive the catalog.
+    // The catalog is same-thread confined. Dependencies are non-owning, are used on
+    // that same thread, and must outlive the catalog.
     ProfileCatalog(ProfileRepositorySource &repository, ProfileWatcher &watcher);
     ~ProfileCatalog();
 
@@ -33,18 +35,29 @@ public:
     [[nodiscard]] CatalogResult records(const RemminaInstance &instance);
     // The returned pointer remains valid only until the next mutating catalog call.
     [[nodiscard]] const ProfileRecord *resolve(QStringView opaqueId) const;
-    void markDirty();
+    void markDirty() noexcept;
     void endSession();
     void reset();
 
 private:
+    struct CallbackLifetime;
+
+    [[nodiscard]] CatalogResult repositoryError(ProfileRepositoryError error,
+                                                const RemminaInstance &instance);
+    [[nodiscard]] bool installWatches(const ProfileSnapshot &snapshot);
+    void installCleanSnapshot(const ProfileSnapshot &snapshot);
+    void deactivateCallback() noexcept;
     void clearSnapshotAndWatches();
 
     ProfileRepositorySource &repository_;
     ProfileWatcher &watcher_;
+    std::shared_ptr<CallbackLifetime> callbackLifetime_;
     QList<ProfileRecord> records_;
+    LocatedProfileDirectory cleanDirectory_;
+    DirectoryFingerprint cleanDirectoryFingerprint_;
     QString selectedInstanceId_;
     bool hasSelectedInstance_ = false;
     bool sessionActive_ = false;
     bool dirty_ = false;
+    bool hasCleanSnapshot_ = false;
 };

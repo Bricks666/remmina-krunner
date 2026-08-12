@@ -41,6 +41,8 @@ private slots:
     void fileRenameInvokesCallback();
     void replaceAndClearSuppressOldCallbacks();
     void invalidOrPartiallyMissingSetsFailWithoutActiveWatches();
+    void callbackExceptionDoesNotEscapeSignalDelivery();
+    void symlinkParentRetargetInvokesCallback();
 };
 
 void QtProfileWatcherTest::directoryCreationInvokesCallback()
@@ -149,6 +151,46 @@ void QtProfileWatcherTest::invalidOrPartiallyMissingSetsFailWithoutActiveWatches
     QCOMPARE(callbacks, 0);
     QVERIFY(watcher.replacePaths({profile, profile}, [&] { ++callbacks; }));
     appendByte(profile);
+    QTRY_VERIFY_WITH_TIMEOUT(callbacks > 0, 5000);
+}
+
+void QtProfileWatcherTest::callbackExceptionDoesNotEscapeSignalDelivery()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString profile = writeFile(temporary.path(), u"throwing.remmina");
+    QtProfileWatcher watcher;
+    int callbacks = 0;
+    QVERIFY(watcher.replacePaths({profile}, [&] {
+        ++callbacks;
+        throw 42;
+    }));
+
+    appendByte(profile);
+
+    QTRY_VERIFY_WITH_TIMEOUT(callbacks > 0, 5000);
+    watcher.clear();
+}
+
+void QtProfileWatcherTest::symlinkParentRetargetInvokesCallback()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString root = QDir(temporary.path()).filePath(QStringLiteral("snap"));
+    const QString first = QDir(root).filePath(QStringLiteral("42/profiles"));
+    const QString second = QDir(root).filePath(QStringLiteral("43/profiles"));
+    QVERIFY(QDir().mkpath(first));
+    QVERIFY(QDir().mkpath(second));
+    const QString current = QDir(root).filePath(QStringLiteral("current"));
+    QVERIFY(QFile::link(QDir(root).filePath(QStringLiteral("42")), current));
+    QtProfileWatcher watcher;
+    int callbacks = 0;
+    QVERIFY(watcher.replacePaths({QDir(current).filePath(QStringLiteral("profiles")), root},
+                                 [&] { ++callbacks; }));
+
+    QVERIFY(QFile::remove(current));
+    QVERIFY(QFile::link(QDir(root).filePath(QStringLiteral("43")), current));
+
     QTRY_VERIFY_WITH_TIMEOUT(callbacks > 0, 5000);
 }
 
