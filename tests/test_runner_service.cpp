@@ -774,14 +774,12 @@ void RunnerServiceTest::configHasExactTriggerContractAndResetOrdering()
              QStringList({QStringLiteral("end"),
                           QStringLiteral("rescan"),
                           QStringLiteral("reset")}));
-    QCOMPARE(config.keys(),
-             QStringList({QStringLiteral("MatchRegex"), QStringLiteral("TriggerWords")}));
+    // KF6 6.28 applies QVariantMap keys in sorted order. Returning TriggerWords
+    // after MatchRegex would replace this case-insensitive expression with the
+    // case-sensitive generated expression "^rem".
+    QCOMPARE(config.keys(), QStringList({QStringLiteral("MatchRegex")}));
     QCOMPARE(config.value(QStringLiteral("MatchRegex")).metaType(),
              QMetaType::fromType<QString>());
-    QCOMPARE(config.value(QStringLiteral("TriggerWords")).metaType(),
-             QMetaType::fromType<QStringList>());
-    QCOMPARE(config.value(QStringLiteral("TriggerWords")).toStringList(),
-             QStringList{QStringLiteral("rem")});
 
     const QRegularExpression regex(config.value(QStringLiteral("MatchRegex")).toString());
     QVERIFY(regex.isValid());

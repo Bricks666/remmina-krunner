@@ -51,6 +51,45 @@ target_link_libraries(remmina_krunner_core
     PRIVATE KF6::ConfigCore
 )
 
+add_library(remmina_krunner_application STATIC src/application.cpp)
+set_target_properties(remmina_krunner_application PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+target_include_directories(remmina_krunner_application
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(remmina_krunner_application PUBLIC remmina_krunner_core)
+
+add_executable(remmina-krunner src/main.cpp)
+target_link_libraries(remmina-krunner
+    PRIVATE remmina_krunner_application remmina_krunner_core Qt6::DBus
+)
+
+include(cmake/EscapeDBusExec.cmake)
+set(REMMINA_KRUNNER_EXECUTABLE
+    "${CMAKE_INSTALL_FULL_BINDIR}/remmina-krunner"
+)
+remmina_escape_dbus_exec_argument(
+    REMMINA_KRUNNER_DBUS_EXEC "${REMMINA_KRUNNER_EXECUTABLE}")
+configure_file(
+    data/org.remminakrunner.KRunner.desktop.in
+    ${CMAKE_CURRENT_BINARY_DIR}/org.remminakrunner.KRunner.desktop
+    @ONLY
+)
+configure_file(
+    data/org.remminakrunner.KRunner.service.in
+    ${CMAKE_CURRENT_BINARY_DIR}/org.remminakrunner.KRunner.service
+    @ONLY
+)
+
+install(TARGETS remmina-krunner RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.remminakrunner.KRunner.desktop
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/krunner/dbusplugins
+)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.remminakrunner.KRunner.service
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/dbus-1/services
+)
+
 add_library(remmina_krunner_kcm STATIC
     src/kcm/instance_settings_model.cpp
     src/kcm/remmina_runner_config.cpp

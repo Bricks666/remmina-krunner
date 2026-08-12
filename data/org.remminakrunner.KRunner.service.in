@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
+# SPDX-License-Identifier: 0BSD
+
+[D-BUS Service]
+Name=org.remminakrunner.KRunner
+Exec=@REMMINA_KRUNNER_DBUS_EXEC@

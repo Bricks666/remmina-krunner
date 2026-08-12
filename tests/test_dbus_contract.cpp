@@ -384,8 +384,7 @@ void DbusContractTest::liveServiceExportsAndAnswersEveryContractMethod()
     const QDBusMessage configReply = await(runner.asyncCall(QStringLiteral("Config")));
     QCOMPARE(configReply.type(), QDBusMessage::ReplyMessage);
     const QVariantMap config = qdbus_cast<QVariantMap>(configReply.arguments().constFirst());
-    QCOMPARE(config.value(QStringLiteral("TriggerWords")).toStringList(),
-             QStringList{QStringLiteral("rem")});
+    QCOMPARE(config.keys(), QStringList{QStringLiteral("MatchRegex")});
     QCOMPARE(registry.rescanCalls, 1);
     QCOMPARE(catalog.resetCalls, 1);
 

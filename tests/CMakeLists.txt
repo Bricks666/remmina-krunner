@@ -134,6 +134,46 @@ add_test(NAME runner_service
 )
 set_tests_properties(dbus_contract runner_service PROPERTIES TIMEOUT 15)
 
+add_executable(test_rescan_cli test_rescan_cli.cpp)
+target_link_libraries(test_rescan_cli
+    PRIVATE remmina_krunner_application KF6::Runner Qt6::DBus Qt6::Test
+)
+krunner_configure_test(test_rescan_cli remmina-krunner
+    DESKTOP_FILE ${PROJECT_BINARY_DIR}/org.remminakrunner.KRunner.desktop
+)
+add_test(NAME rescan_cli
+    COMMAND ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:test_rescan_cli>
+)
+set_tests_properties(rescan_cli PROPERTIES TIMEOUT 15)
+
+add_test(NAME metadata
+    COMMAND ${CMAKE_COMMAND}
+        -DDESKTOP_FILE=${PROJECT_BINARY_DIR}/org.remminakrunner.KRunner.desktop
+        -DSERVICE_FILE=${PROJECT_BINARY_DIR}/org.remminakrunner.KRunner.service
+        -DEXPECTED_EXEC=${CMAKE_INSTALL_FULL_BINDIR}/remmina-krunner
+        -DEXPECTED_EXEC_VALUE=${REMMINA_KRUNNER_DBUS_EXEC}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_metadata.cmake
+)
+
+find_program(TEST_TIMEOUT_EXECUTABLE NAMES timeout REQUIRED)
+find_program(TEST_GDBUS_EXECUTABLE NAMES gdbus REQUIRED)
+find_program(TEST_ACTIVATION_BASH_EXECUTABLE NAMES bash REQUIRED)
+find_program(TEST_DBUS_DAEMON_EXECUTABLE NAMES dbus-daemon REQUIRED)
+add_test(NAME activation
+    COMMAND ${TEST_ACTIVATION_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_dbus_activation.sh
+        ${CMAKE_COMMAND}
+        ${TEST_ACTIVATION_BASH_EXECUTABLE}
+        ${TEST_TIMEOUT_EXECUTABLE}
+        ${DBUS_RUN_SESSION_EXECUTABLE}
+        ${TEST_GDBUS_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_BINARY_DIR}
+        $<TARGET_FILE:remmina-krunner>
+        ${TEST_DBUS_DAEMON_EXECUTABLE}
+)
+set_tests_properties(activation PROPERTIES TIMEOUT 20)
+
 add_executable(process_launcher_helper process_launcher_helper.cpp)
 target_link_libraries(process_launcher_helper PRIVATE Qt6::Core)
 

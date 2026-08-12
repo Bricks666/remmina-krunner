@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
+# SPDX-License-Identifier: 0BSD
+
+[Desktop Entry]
+Type=Service
+Name=Remmina
+Description=Search and create Remmina connections
+Icon=org.remmina.Remmina
+X-KDE-PluginInfo-Name=org.remminakrunner.KRunner
+X-KDE-PluginInfo-Version=@PROJECT_VERSION@
+X-KDE-PluginInfo-License=0BSD
+X-KDE-PluginInfo-EnabledByDefault=true
+X-Plasma-API=DBus2
+X-Plasma-DBusRunner-Service=org.remminakrunner.KRunner
+X-Plasma-DBusRunner-Path=/runner
+X-Plasma-Runner-Match-Regex=(?i)^rem(?:\s.*)?$
+X-Plasma-Runner-Syntaxes=rem :q:;rem new
+X-Plasma-Runner-Syntax-Descriptions=Search Remmina connections;Create a Remmina connection
+X-Plasma-Runner-Unique-Results=true
+X-KDE-ConfigModule=kf6/krunner/kcms/kcm_remmina_krunner

@@ -102,7 +102,6 @@ QVariantMap runnerConfig()
 {
     return {
         {QStringLiteral("MatchRegex"), QStringLiteral("(?i)^rem(?:\\s.*)?$")},
-        {QStringLiteral("TriggerWords"), QStringList{QStringLiteral("rem")}},
     };
 }
 
