@@ -33,6 +33,8 @@ namespace {
 constexpr int possibleMatch = 50;
 constexpr int exactMatch = 100;
 constexpr int informationalMatch = 30;
+const QString validProfileA(64, QLatin1Char('a'));
+const QString validProfileB(64, QLatin1Char('b'));
 
 RemminaInstance instance(QString id = QStringLiteral("native:/usr/bin/remmina"))
 {
@@ -326,7 +328,7 @@ private slots:
     void successfulLookupsReuseSessionAndRestartIdleTimer();
     void emptySuccessfulLookupStillExpiresSession();
     void runRoutesOnlySupportedIdsAndAlwaysConsumesToken();
-    void onlyCurrentOfferedProfileIdsAreActionable();
+    void opaqueProfileIdsRemainActionableAcrossSessionCleanup();
     void activationTokenReplacementAndLifecycleClearing();
     void matchExpiresAbandonedActivationToken();
     void idleTimerIsAServiceChild();
@@ -551,6 +553,7 @@ void RunnerServiceTest::emptySuccessfulLookupStillExpiresSession()
 void RunnerServiceTest::runRoutesOnlySupportedIdsAndAlwaysConsumesToken()
 {
     Harness harness;
+    harness.catalog.result = QList<ProfileRecord>{record(validProfileA)};
     QCOMPARE(harness.service.Match(QStringLiteral("rem office")).size(), 1);
     harness.service.SetActivationToken(QStringLiteral("token-action"));
     harness.service.Run(QStringLiteral("action:new"), QString{});
@@ -560,9 +563,9 @@ void RunnerServiceTest::runRoutesOnlySupportedIdsAndAlwaysConsumesToken()
 
     QCOMPARE(harness.service.Match(QStringLiteral("rem office")).size(), 1);
     harness.service.SetActivationToken(QStringLiteral("token-profile"));
-    harness.service.Run(QStringLiteral("opaque-profile-a"), QString{});
+    harness.service.Run(validProfileA, QString{});
     QCOMPARE(harness.launcher.connectCalls, 1);
-    QCOMPARE(harness.launcher.ids, QStringList{QStringLiteral("opaque-profile-a")});
+    QCOMPARE(harness.launcher.ids, QStringList{validProfileA});
     QCOMPARE(harness.launcher.tokens.constLast(), QStringLiteral("token-profile"));
 
     for (const auto &[id, action] : {
@@ -570,7 +573,7 @@ void RunnerServiceTest::runRoutesOnlySupportedIdsAndAlwaysConsumesToken()
              std::pair{QStringLiteral("error:internal"), QString{}},
              std::pair{QStringLiteral("action:unknown"), QString{}},
              std::pair{QStringLiteral("never-offered-profile"), QString{}},
-             std::pair{QStringLiteral("opaque-profile-a"), QStringLiteral("unsupported")},
+             std::pair{validProfileA, QStringLiteral("unsupported")},
          }) {
         harness.service.SetActivationToken(QStringLiteral("discard-this"));
         harness.service.Run(id, action);
@@ -581,11 +584,11 @@ void RunnerServiceTest::runRoutesOnlySupportedIdsAndAlwaysConsumesToken()
     QCOMPARE(harness.launcher.tokens.constLast(), QString{});
 }
 
-void RunnerServiceTest::onlyCurrentOfferedProfileIdsAreActionable()
+void RunnerServiceTest::opaqueProfileIdsRemainActionableAcrossSessionCleanup()
 {
     const QList<ProfileRecord> records{
-        record(QStringLiteral("office-id"), QStringLiteral("Office")),
-        record(QStringLiteral("home-id"), QStringLiteral("Home")),
+        record(validProfileA, QStringLiteral("Office")),
+        record(validProfileB, QStringLiteral("Home")),
     };
 
     {
@@ -594,46 +597,40 @@ void RunnerServiceTest::onlyCurrentOfferedProfileIdsAreActionable()
         QCOMPARE(harness.service.Match(QStringLiteral("rem office")).size(), 1);
         QCOMPARE(harness.service.Match(QStringLiteral("rem home")).size(), 1);
         harness.service.SetActivationToken(QStringLiteral("discard-replaced"));
-        harness.service.Run(QStringLiteral("office-id"), QString{});
-        QCOMPARE(harness.launcher.connectCalls, 0);
+        harness.service.Run(validProfileA, QString{});
+        QCOMPARE(harness.launcher.connectCalls, 1);
+        QCOMPARE(harness.launcher.ids, QStringList{validProfileA});
         harness.service.Run(QStringLiteral("action:new"), QString{});
-        QCOMPARE(harness.launcher.tokens, QStringList{QString{}});
+        QCOMPARE(harness.launcher.tokens,
+                 QStringList({QStringLiteral("discard-replaced"), QString{}}));
     }
 
-    for (const QString &ending : {QStringLiteral("teardown"),
-                                  QStringLiteral("config"),
-                                  QStringLiteral("error")}) {
+    for (const QString &ending : {QStringLiteral("teardown"), QStringLiteral("idle")}) {
         Harness harness;
         harness.catalog.result = records;
         QCOMPARE(harness.service.Match(QStringLiteral("rem office")).size(), 1);
         if (ending == QStringLiteral("teardown")) {
             harness.service.Teardown();
-        } else if (ending == QStringLiteral("config")) {
-            harness.service.Config();
         } else {
-            harness.catalog.result = ProfileCatalogError::UnreadableDirectory;
-            verifyGenericError(harness.service.Match(QStringLiteral("rem office")),
-                               QStringLiteral("error:unreadable"));
+            QTimer *timer = harness.service.findChild<QTimer *>();
+            QVERIFY(timer != nullptr);
+            timer->setInterval(0);
+            timer->start();
+            QTRY_VERIFY_WITH_TIMEOUT(!timer->isActive(), 1000);
         }
-        harness.service.Run(QStringLiteral("office-id"), QString{});
-        QCOMPARE(harness.launcher.connectCalls, 0);
+        harness.service.Run(validProfileA, QString{});
+        QCOMPARE(harness.launcher.connectCalls, 1);
+        QCOMPARE(harness.launcher.ids, QStringList{validProfileA});
     }
 
-    {
-        Harness idle(0ms);
-        idle.catalog.result = records;
-        QCOMPARE(idle.service.Match(QStringLiteral("rem office")).size(), 1);
-        QTRY_COMPARE_WITH_TIMEOUT(idle.catalog.endCalls, 1, 1000);
-        idle.service.Run(QStringLiteral("office-id"), QString{});
-        QCOMPARE(idle.launcher.connectCalls, 0);
+    Harness malformed;
+    for (const QString &id : {QString(63, QLatin1Char('a')),
+                              QString(65, QLatin1Char('a')),
+                              QString(64, QLatin1Char('A')),
+                              QString(63, QLatin1Char('a')) + QLatin1Char('g')}) {
+        malformed.service.Run(id, QString{});
     }
-
-    Harness current;
-    current.catalog.result = records;
-    QCOMPARE(current.service.Match(QStringLiteral("rem home")).size(), 1);
-    current.service.Run(QStringLiteral("home-id"), QString{});
-    QCOMPARE(current.launcher.connectCalls, 1);
-    QCOMPARE(current.launcher.ids, QStringList{QStringLiteral("home-id")});
+    QCOMPARE(malformed.launcher.connectCalls, 0);
 }
 
 void RunnerServiceTest::activationTokenReplacementAndLifecycleClearing()
@@ -671,7 +668,7 @@ void RunnerServiceTest::matchExpiresAbandonedActivationToken()
     const QList<Case> cases{
         {QStringLiteral("rem new"), QStringLiteral("action:new")},
         {QStringLiteral("rem"), QStringLiteral("action:new")},
-        {QStringLiteral("rem office"), QStringLiteral("opaque-profile-a")},
+        {QStringLiteral("rem office"), validProfileA},
         {QStringLiteral("rem office"), QStringLiteral("action:new"), true},
     };
     for (const Case &item : cases) {
@@ -723,12 +720,13 @@ void RunnerServiceTest::selectionChangeBetweenMatchAndRunIsRejectedByLauncher()
     registry.value.instances = {instance(QStringLiteral("B"))};
     registry.value.selectedId = QStringLiteral("B");
     catalog.resolvableInstanceId = QStringLiteral("B");
-    catalog.resolvedRecord = record();
+    catalog.result = QList<ProfileRecord>{record(validProfileA)};
+    catalog.resolvedRecord = record(validProfileA);
     QCOMPARE(service.Match(QStringLiteral("rem office")).size(), 1);
 
     registry.value.instances = {instance(QStringLiteral("A"))};
     registry.value.selectedId = QStringLiteral("A");
-    service.Run(QStringLiteral("opaque-profile-a"), QString{});
+    service.Run(validProfileA, QString{});
     QCOMPARE(catalog.resolveCalls, 1);
     QCOMPARE(catalog.resolvedInstanceIds, QStringList{QStringLiteral("A")});
     QCOMPARE(process.calls, 0);
@@ -839,8 +837,9 @@ void RunnerServiceTest::everyPublicSlotContainsDependencyExceptions()
     launcherFailure.service.Run(QStringLiteral("action:new"), QString{});
     QCOMPARE(launcherFailure.launcher.tokens.constLast(), QString{});
     launcherFailure.launcher.throwConnect = true;
+    launcherFailure.catalog.result = QList<ProfileRecord>{record(validProfileA)};
     QCOMPARE(launcherFailure.service.Match(QStringLiteral("rem office")).size(), 1);
-    launcherFailure.service.Run(QStringLiteral("opaque-profile-a"), QString{});
+    launcherFailure.service.Run(validProfileA, QString{});
     QCOMPARE(launcherFailure.launcher.connectCalls, 1);
 
     Harness resetFailure;

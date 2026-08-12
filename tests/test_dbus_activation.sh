@@ -12,6 +12,7 @@ source_root=$6
 build_root=$7
 built_executable=$8
 dbus_daemon_command=$9
+sleep_command=${10}
 
 test_root="${build_root}/activation test"
 "${cmake_command}" -E rm -rf "${test_root}"
@@ -22,13 +23,17 @@ test_home="${test_root}/home"
 fake_bin="${test_root}/fake bin"
 service_file="${service_data}/dbus-1/services/org.remminakrunner.KRunner.service"
 mkdir -p -- "${case_root}/bin" "${service_data}/dbus-1/services" \
-    "${test_home}/cache" "${test_home}/config" "${fake_bin}"
+    "${test_home}/cache" "${test_home}/config" \
+    "${test_home}/.local/share/remmina" "${fake_bin}"
 cp -- "${built_executable}" "${case_root}/bin/remmina-krunner"
 "${cmake_command}" -E create_symlink "${dbus_daemon_command}" "${fake_bin}/dbus-daemon"
 
 # The service scans this isolated executable and cannot see host Remmina/Flatpak.
-printf '#!/bin/sh\nexit 0\n' >"${fake_bin}/remmina"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" >"${TEST_REMMINA_CALL_LOG:?}"\n' >"${fake_bin}/remmina"
 chmod +x "${fake_bin}/remmina"
+profile_path=${test_home}/.local/share/remmina/isolated.remmina
+printf '[remmina]\nname=Isolated profile\nserver=isolated.example.invalid\nprotocol=RDP\n' \
+    >"${profile_path}"
 export ACTIVATION_EXECUTABLE_PATH="${case_root}/bin/remmina-krunner"
 "${cmake_command}" \
     -DESCAPE_HELPER="${source_root}/cmake/EscapeDBusExec.cmake" \
@@ -44,6 +49,9 @@ export PATH="${fake_bin}"
 export TEST_GDBUS="${gdbus_command}"
 export TEST_TIMEOUT="${timeout_command}"
 export TEST_EXPECTED_EXECUTABLE="${case_root}/bin/remmina-krunner"
+export TEST_REMMINA_CALL_LOG="${test_root}/remmina-call.log"
+export TEST_PROFILE_PATH="${profile_path}"
+export TEST_SLEEP="${sleep_command}"
 
 "${timeout_command}" 15 "${dbus_run_session_command}" -- \
     "${bash_command}" -euo pipefail -c '
@@ -87,8 +95,26 @@ create_match=$("${TEST_TIMEOUT}" 8 "${TEST_GDBUS}" call --session \
     --method org.kde.krunner1.Match "rem new")
 [[ ${create_match} == *"action:new"* ]]
 
+profile_match=$("${TEST_TIMEOUT}" 8 "${TEST_GDBUS}" call --session \
+    --dest org.remminakrunner.KRunner --object-path /runner \
+    --method org.kde.krunner1.Match "rem isolated")
+[[ ${profile_match} =~ ([0-9a-f]{64}) ]]
+profile_id=${BASH_REMATCH[1]}
+remaining_match=${profile_match#*"${profile_id}"}
+[[ ! ${remaining_match} =~ [0-9a-f]{64} ]]
+
 "${TEST_TIMEOUT}" 8 "${TEST_GDBUS}" call --session \
     --dest org.remminakrunner.KRunner --object-path /runner \
     --method org.kde.krunner1.Teardown >/dev/null
 kill -0 "${runner_pid}"
+
+"${TEST_TIMEOUT}" 8 "${TEST_GDBUS}" call --session \
+    --dest org.remminakrunner.KRunner --object-path /runner \
+    --method org.kde.krunner1.Run "${profile_id}" "" >/dev/null
+for _ in {1..80}; do
+    [[ -f ${TEST_REMMINA_CALL_LOG} ]] && break
+    "${TEST_SLEEP}" 0.025
+done
+mapfile -t remmina_arguments <"${TEST_REMMINA_CALL_LOG}"
+[[ ${remmina_arguments[*]} == "--connect ${TEST_PROFILE_PATH}" ]]
 '

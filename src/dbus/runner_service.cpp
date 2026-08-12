@@ -136,6 +136,21 @@ QString profileSubtext(const ProfileRecord &record)
     return components.join(QStringLiteral(" · "));
 }
 
+bool isOpaqueProfileId(QStringView id) noexcept
+{
+    constexpr qsizetype opaqueProfileIdLength = 64;
+    if (id.size() != opaqueProfileIdLength) {
+        return false;
+    }
+    for (const QChar character : id) {
+        const ushort value = character.unicode();
+        if (!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 RunnerService::RunnerService(InstanceRegistryControlSource &registry,
@@ -184,11 +199,9 @@ RemoteMatches RunnerService::Match(const QString &query) noexcept
     try {
         const ParsedQuery parsed = parseRunnerQuery(query);
         if (parsed.kind == QueryKind::Ignore) {
-            offeredProfileIds_.clear();
             return {};
         }
         if (parsed.kind == QueryKind::Create) {
-            offeredProfileIds_.clear();
             return creationResult_;
         }
 
@@ -211,9 +224,7 @@ RemoteMatches RunnerService::Match(const QString &query) noexcept
         const QList<SearchMatch> matches =
             matchProfiles(std::get<QList<ProfileRecord>>(result), parsed.tokens);
         RemoteMatches remoteMatches;
-        QSet<QString> offeredProfileIds;
         remoteMatches.reserve(matches.size());
-        offeredProfileIds.reserve(matches.size());
         for (const SearchMatch &match : matches) {
             if (match.record.opaqueId.isEmpty()) {
                 continue;
@@ -226,9 +237,7 @@ RemoteMatches RunnerService::Match(const QString &query) noexcept
                 match.relevance,
                 visibleProperties(profileSubtext(match.record)),
             });
-            offeredProfileIds.insert(match.record.opaqueId);
         }
-        offeredProfileIds_.swap(offeredProfileIds);
         catalogIdleTimer_->start();
         return remoteMatches;
     } catch (...) {
@@ -252,7 +261,7 @@ void RunnerService::Run(const QString &matchId, const QString &actionId) noexcep
             if (matchId == newActionId) {
                 launcher_.create(QStringView{activationToken});
             } else if (!matchId.startsWith(actionPrefix)
-                       && offeredProfileIds_.contains(matchId)) {
+                       && isOpaqueProfileId(QStringView{matchId})) {
                 launcher_.connect(QStringView{matchId}, QStringView{activationToken});
             }
         }
@@ -292,7 +301,6 @@ void RunnerService::SetActivationToken(const QString &token) noexcept
 void RunnerService::endActiveSession(bool clearActivationToken) noexcept
 {
     catalogIdleTimer_->stop();
-    offeredProfileIds_.clear();
     if (clearActivationToken) {
         activationToken_.clear();
     }
@@ -310,7 +318,6 @@ void RunnerService::teardownEveryCall() noexcept
 {
     catalogIdleTimer_->stop();
     activationToken_.clear();
-    offeredProfileIds_.clear();
     sessionActive_ = false;
     try {
         catalog_.endSession();

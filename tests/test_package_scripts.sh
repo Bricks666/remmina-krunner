@@ -116,7 +116,8 @@ make_bundle() {
         "${bundle}/share/krunner/dbusplugins" "${bundle}/LICENSES"
     cp -- "${payload}" "${bundle}/bin/remmina-krunner"
     printf 'plugin\n' >"${bundle}/${plugin_relative}"
-    printf '[Desktop Entry]\nType=Service\n' >"${bundle}/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop"
+    printf '[Desktop Entry]\nType=Service\nX-KDE-ConfigModule=kf6/krunner/kcms/kcm_remmina_krunner\n' \
+        >"${bundle}/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop"
     printf '[D-BUS Service]\nName=org.remminakrunner.KRunner\nExec="/staged/bin/remmina-krunner"\n' \
         >"${bundle}/share/dbus-1/services/org.remminakrunner.KRunner.service"
     printf 'license\n' >"${bundle}/LICENSE"
@@ -250,6 +251,10 @@ assert_mode "${binary}" 755
 assert_mode "${plugin}" 755
 assert_mode "${desktop}" 644
 assert_mode "${service}" 644
+[[ $(grep -c '^X-KDE-ConfigModule=' "${desktop}") == 1 ]] ||
+    fail "installed runner metadata must contain exactly one KCM path"
+[[ $(grep '^X-KDE-ConfigModule=' "${desktop}") == "X-KDE-ConfigModule=${plugin}" ]] ||
+    fail "installed runner metadata does not name the installed KCM"
 mapfile -t files < <(find "${home}" -type f -printf '%P\n' | LC_ALL=C sort)
 expected=(.local/bin/remmina-krunner ".local/${plugin_relative}" .local/share/dbus-1/services/org.remminakrunner.KRunner.service .local/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop)
 mapfile -t expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
@@ -266,9 +271,13 @@ custom_prefix=${root}/'local prefix "quote" \slash'
 mkdir -p -- "${custom_home}" "${custom_data}" "${custom_prefix}"
 run_install "${bundle}" "${custom_home}" "${custom_data}" "${custom_prefix}"
 custom_service=${custom_data}/dbus-1/services/org.remminakrunner.KRunner.service
+custom_desktop=${custom_data}/krunner/dbusplugins/org.remminakrunner.KRunner.desktop
 grep -Fq 'Exec="' "${custom_service}" || fail "service Exec is not quoted"
 expected_exec='Exec="'"${root}"'/local prefix \\"quote\\" \\\\slash/bin/remmina-krunner"'
 [[ $(grep '^Exec=' "${custom_service}") == "${expected_exec}" ]] || fail "hostile custom-prefix Exec escaping differs"
+expected_kcm='X-KDE-ConfigModule='"${root}"'/local\sprefix\s"quote"\s\\slash/'"${plugin_relative}"
+[[ $(grep '^X-KDE-ConfigModule=' "${custom_desktop}") == "${expected_kcm}" ]] ||
+    fail "hostile custom-prefix KCM escaping differs"
 [[ -f ${custom_prefix}/bin/remmina-krunner ]] || fail "custom-prefix runner missing"
 [[ -f ${custom_prefix}/${plugin_relative} ]] || fail "custom-prefix plugin missing"
 

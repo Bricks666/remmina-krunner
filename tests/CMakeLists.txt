@@ -78,7 +78,8 @@ target_compile_definitions(test_kcm PRIVATE
     KCM_PLUGIN_PATH="$<TARGET_FILE:kcm_remmina_krunner>"
 )
 target_link_libraries(test_kcm
-    PRIVATE remmina_krunner_kcm KF6::CoreAddons KF6::KCMUtils Qt6::Test Qt6::Widgets
+    PRIVATE remmina_krunner_kcm KF6::CoreAddons KF6::KCMUtils KF6::KCMUtilsCore
+            Qt6::Test Qt6::Widgets
 )
 add_dependencies(test_kcm kcm_remmina_krunner)
 
@@ -156,6 +157,7 @@ add_test(NAME metadata
 )
 
 find_program(TEST_TIMEOUT_EXECUTABLE NAMES timeout REQUIRED)
+find_program(TEST_SLEEP_EXECUTABLE NAMES sleep REQUIRED)
 find_program(TEST_GDBUS_EXECUTABLE NAMES gdbus REQUIRED)
 find_program(TEST_ACTIVATION_BASH_EXECUTABLE NAMES bash REQUIRED)
 find_program(TEST_DBUS_DAEMON_EXECUTABLE NAMES dbus-daemon REQUIRED)
@@ -171,6 +173,7 @@ add_test(NAME activation
         ${PROJECT_BINARY_DIR}
         $<TARGET_FILE:remmina-krunner>
         ${TEST_DBUS_DAEMON_EXECUTABLE}
+        ${TEST_SLEEP_EXECUTABLE}
 )
 set_tests_properties(activation PROPERTIES TIMEOUT 20)
 

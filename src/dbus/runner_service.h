@@ -6,7 +6,6 @@
 #include "dbus/dbus_types.h"
 
 #include <QObject>
-#include <QSet>
 #include <QString>
 #include <QVariantMap>
 
@@ -57,7 +56,6 @@ private:
     RemminaLaunchSource &launcher_;
     QTimer *catalogIdleTimer_;
     QString activationToken_;
-    QSet<QString> offeredProfileIds_;
     bool sessionActive_ = false;
     const RemoteMatches creationResult_;
     const RemoteMatches noInstanceError_;

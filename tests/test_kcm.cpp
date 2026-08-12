@@ -11,8 +11,13 @@
 #include <KCModule>
 #include <KPluginFactory>
 #include <KPluginMetaData>
+#include <KPluginModel>
 
 #include <QComboBox>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QTemporaryDir>
@@ -157,6 +162,7 @@ private slots:
     void defaultsChangePendingSelectionWithoutPersistence();
     void widgetContainsNoProfileControlsOrProfileContent();
     void noJsonPluginFactoryLoadsStandardConstructorInIsolation();
+    void absoluteConfigModuleIsDiscoverableOutsideQtPluginPaths();
 };
 
 void RemminaRunnerConfigTest::loadPopulatesPackagingIdentityAndRescansEveryTime()
@@ -385,6 +391,49 @@ void RemminaRunnerConfigTest::noJsonPluginFactoryLoadsStandardConstructorInIsola
     QVERIFY(!instanceCombo->isEnabled());
     QCOMPARE(instanceCombo->count(), 0);
     QCOMPARE(statusLabel->text(), QStringLiteral("No Remmina installations found."));
+}
+
+void RemminaRunnerConfigTest::absoluteConfigModuleIsDiscoverableOutsideQtPluginPaths()
+{
+    EnvironmentGuard guard({QByteArrayLiteral("HOME"), QByteArrayLiteral("PATH"),
+                            QByteArrayLiteral("QT_PLUGIN_PATH"),
+                            QByteArrayLiteral("XDG_CONFIG_HOME"), QByteArrayLiteral("XDG_DATA_HOME")});
+    QTemporaryDir isolated(QDir::tempPath()
+                           + QStringLiteral("/absolute kcm “quote” \\backslash-XXXXXX"));
+    QVERIFY(isolated.isValid());
+    qputenv("HOME", isolated.path().toUtf8());
+    qputenv("PATH", isolated.path().toUtf8());
+    qunsetenv("QT_PLUGIN_PATH");
+    qputenv("XDG_CONFIG_HOME", isolated.path().toUtf8());
+    qputenv("XDG_DATA_HOME", isolated.path().toUtf8());
+
+    const QString copiedPlugin = isolated.filePath(QStringLiteral("kcm_remmina_krunner.so"));
+    QVERIFY2(QFile::copy(QStringLiteral(KCM_PLUGIN_PATH), copiedPlugin), qPrintable(copiedPlugin));
+
+    const QJsonObject runnerMetaData{
+        {QStringLiteral("KPlugin"),
+         QJsonObject{{QStringLiteral("Id"), QStringLiteral("org.remminakrunner.KRunner")},
+                     {QStringLiteral("Name"), QStringLiteral("Remmina")}}},
+        {QStringLiteral("X-KDE-ConfigModule"), copiedPlugin},
+    };
+    const KPluginMetaData runnerPlugin(
+        runnerMetaData, isolated.filePath(QStringLiteral("org.remminakrunner.KRunner.desktop")));
+    QVERIFY(runnerPlugin.isValid());
+
+    KPluginModel model;
+    model.addPlugins({runnerPlugin}, {});
+    const KPluginMetaData configModule =
+        model.findConfigForPluginId(QStringLiteral("org.remminakrunner.KRunner"));
+    QVERIFY(configModule.isValid());
+    QCOMPARE(QFileInfo(configModule.fileName()).canonicalFilePath(),
+             QFileInfo(copiedPlugin).canonicalFilePath());
+
+    QWidget host;
+    auto result = KPluginFactory::instantiatePlugin<KCModule>(configModule, &host);
+    QVERIFY2(result.plugin != nullptr, qPrintable(result.errorText));
+    std::unique_ptr<KCModule> module(result.plugin);
+    module->load();
+    QVERIFY(module->widget()->findChild<QComboBox *>(QStringLiteral("instanceCombo")) != nullptr);
 }
 
 QTEST_MAIN(RemminaRunnerConfigTest)

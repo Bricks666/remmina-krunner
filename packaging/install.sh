@@ -177,6 +177,9 @@ done
 
 mapfile -t exec_lines < <(grep '^Exec=' "${payload_service}" || true)
 [[ ${#exec_lines[@]} -eq 1 ]] || die "D-Bus service metadata must contain exactly one Exec entry" 66
+mapfile -t kcm_lines < <(grep '^X-KDE-ConfigModule=' "${payload_desktop}" || true)
+[[ ${#kcm_lines[@]} -eq 1 ]] ||
+    die "KRunner metadata must contain exactly one configuration module entry" 66
 
 binary_path=${install_prefix}/bin/remmina-krunner
 plugin_path=${install_prefix}/${plugin_relative}
@@ -393,8 +396,29 @@ for index in 0 1 2 3; do
 done
 install -m 0755 -- "${payload_binary}" "${staged_paths[0]}"
 install -m 0755 -- "${payload_plugin}" "${staged_paths[1]}"
-install -m 0644 -- "${payload_desktop}" "${staged_paths[2]}"
+install -m 0644 /dev/null "${staged_paths[2]}"
 install -m 0644 /dev/null "${staged_paths[3]}"
+escape_desktop_entry_value() {
+    local value=$1 result= character index
+    for ((index = 0; index < ${#value}; ++index)); do
+        character=${value:index:1}
+        case ${character} in
+            ' ') result+='\s' ;;
+            $'\t') result+='\t' ;;
+            \\) result+='\\' ;;
+            *) result+="${character}" ;;
+        esac
+    done
+    printf '%s' "${result}"
+}
+escaped_plugin=$(escape_desktop_entry_value "${plugin_path}")
+while IFS= read -r line || [[ -n ${line} ]]; do
+    if [[ ${line} == X-KDE-ConfigModule=* ]]; then
+        printf 'X-KDE-ConfigModule=%s\n' "${escaped_plugin}" >>"${staged_paths[2]}"
+    else
+        printf '%s\n' "${line}" >>"${staged_paths[2]}"
+    fi
+done <"${payload_desktop}"
 escape_dbus_exec_argument() {
     local value=$1 result= character index
     for ((index = 0; index < ${#value}; ++index)); do
