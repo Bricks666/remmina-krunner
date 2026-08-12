@@ -47,6 +47,36 @@ fi
 repository_git diff --check --
 repository_git diff --cached --check --
 
+mapfile -d '' -t untracked_files < <(
+    repository_git ls-files --others --exclude-standard -z --
+)
+for untracked_file in "${untracked_files[@]}"; do
+    untracked_path=${repository_root}/${untracked_file}
+    if [[ ! -f ${untracked_path} || -L ${untracked_path} ]]; then
+        continue
+    fi
+    untracked_whitespace=
+    set +e
+    untracked_whitespace=$(repository_git diff --no-index --check -- \
+        /dev/null "${untracked_path}" 2>&1)
+    untracked_status=$?
+    set -e
+    case ${untracked_status} in
+        0|1)
+            ;;
+        3)
+            echo "Untracked file has whitespace errors: ${untracked_file}" >&2
+            printf '%s\n' "${untracked_whitespace}" >&2
+            exit 1
+            ;;
+        *)
+            echo "Unable to inspect untracked file: ${untracked_file}" >&2
+            printf '%s\n' "${untracked_whitespace}" >&2
+            exit 1
+            ;;
+    esac
+done
+
 check_format_diff() {
     local description=$1
     shift
@@ -89,10 +119,17 @@ if [[ -n ${CI_DIFF_BASE:-} ]]; then
     fi
 fi
 
-mapfile -d '' -t untracked_format_files < <(
-    repository_git ls-files --others --exclude-standard -z -- \
-        '*.cc' '*.cpp' '*.h' '*.hpp'
-)
+untracked_format_files=()
+for untracked_file in "${untracked_files[@]}"; do
+    case ${untracked_file} in
+        *.cc|*.cpp|*.h|*.hpp)
+            untracked_path=${repository_root}/${untracked_file}
+            if [[ -f ${untracked_path} && ! -L ${untracked_path} ]]; then
+                untracked_format_files+=("${untracked_file}")
+            fi
+            ;;
+    esac
+done
 if [[ ${#untracked_format_files[@]} -gt 0 ]]; then
     format_paths=()
     for format_file in "${untracked_format_files[@]}"; do

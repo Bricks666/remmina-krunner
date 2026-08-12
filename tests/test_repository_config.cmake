@@ -71,6 +71,8 @@ foreach(NEEDLE IN ITEMS
     "fetch-depth: 0"
     "persist-credentials: false"
     "podman --version"
+    [=[rootless=$(podman info --format '{{.Host.Security.Rootless}}')]=]
+    [=[[[ "${rootless}" == true ]]]=]
     "./scripts/resolve_ci_diff_base.sh"
     "./scripts/container.sh check"
     "./scripts/container.sh sanitize"
@@ -185,6 +187,8 @@ assert_contains("${CI_TEXT}" "CI script" [=[-DCMAKE_INSTALL_PREFIX="/${bundle_pr
 assert_contains("${CI_TEXT}" "CI script" "ValidateInstallInventory.cmake")
 file(READ "${GIT_CHECK}" GIT_CHECK_TEXT)
 assert_contains("${GIT_CHECK_TEXT}" "repository checker" "clang-format")
+assert_contains("${GIT_CHECK_TEXT}" "repository checker"
+    "ls-files --others --exclude-standard -z")
 
 foreach(SCRIPT IN ITEMS
     "${CONTAINER_WRAPPER}" "${CI_SCRIPT}" "${GIT_CHECK}" "${DIFF_RESOLVER}"

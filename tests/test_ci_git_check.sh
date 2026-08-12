@@ -33,6 +33,51 @@ printf '%s\n' 'int  legacy=0;' >"${repository}/legacy.cpp"
 "${git_executable}" -C "${repository}" commit -q -m "legacy formatting baseline"
 base_commit=$("${git_executable}" -C "${repository}" rev-parse HEAD)
 
+clean_untracked=${repository}/clean\ untracked.md
+printf '%s\n' 'clean untracked text' >"${clean_untracked}"
+"${git_check}" "${repository}"
+printf 'bad untracked whitespace \n' >"${clean_untracked}"
+if "${git_check}" "${repository}" >/dev/null 2>&1; then
+    echo "Untracked whitespace errors were not detected" >&2
+    exit 1
+fi
+rm -f -- "${clean_untracked}"
+
+newline_untracked=${repository}/$'line\nbreak.md'
+printf '%s\n' 'clean newline-named text' >"${newline_untracked}"
+"${git_check}" "${repository}"
+printf 'bad newline-named whitespace \n' >"${newline_untracked}"
+if "${git_check}" "${repository}" >/dev/null 2>&1; then
+    echo "Whitespace errors in a newline-named untracked file were not detected" >&2
+    exit 1
+fi
+rm -f -- "${newline_untracked}"
+
+untracked_binary=${repository}/synthetic\ binary.bin
+printf '\0binary payload \n' >"${untracked_binary}"
+"${git_check}" "${repository}"
+rm -f -- "${untracked_binary}"
+
+untracked_script=${repository}/synthetic\ script.sh
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" clean' >"${untracked_script}"
+"${git_check}" "${repository}"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" clean  ' >"${untracked_script}"
+if "${git_check}" "${repository}" >/dev/null 2>&1; then
+    echo "Untracked shell whitespace errors were not detected" >&2
+    exit 1
+fi
+rm -f -- "${untracked_script}"
+
+untracked_cpp=${repository}/synthetic\ source.cpp
+printf '%s\n' 'int current = 0;' >"${untracked_cpp}"
+"${git_check}" "${repository}"
+printf '%s\n' 'int  current=0;' >"${untracked_cpp}"
+if "${git_check}" "${repository}" >/dev/null 2>&1; then
+    echo "Untracked C++ formatting errors were not detected" >&2
+    exit 1
+fi
+rm -f -- "${untracked_cpp}"
+
 printf '%s\n' 'int current = 0;' >>"${repository}/legacy.cpp"
 "${git_check}" "${repository}"
 printf '%s\n' 'int  current=0;' >>"${repository}/legacy.cpp"

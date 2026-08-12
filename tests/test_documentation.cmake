@@ -73,9 +73,20 @@ foreach(NEEDLE IN ITEMS
     "0BSD"
     "git diff --check"
     "documentation"
+    "no project-declared credential or engine-socket mounts"
+    "inspect and disable"
+    "provider-added credential forwarding"
 )
     assert_contains("${CONTRIBUTING_TEXT}" "CONTRIBUTING.md" "${NEEDLE}")
 endforeach()
+string(FIND "${CONTRIBUTING_TEXT}"
+    "never an engine socket, host home directory, desktop session, or credential agent"
+    FALSE_ISOLATION_OFFSET)
+if(NOT FALSE_ISOLATION_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+        "CONTRIBUTING.md must distinguish project configuration from provider-added mounts"
+    )
+endif()
 
 string(REGEX MATCHALL "(^|\n)[ \t]*(cmake|ctest)([ \t]|$)[^\n]*" HOST_COMMANDS "${ALL_TEXT}")
 if(HOST_COMMANDS)

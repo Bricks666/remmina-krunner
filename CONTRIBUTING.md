@@ -27,9 +27,12 @@ commit range. `sanitize` repeats the suite with ASan and UBSan. `release-build`
 configures with tests disabled and proves the production graph builds.
 
 The Dev Container uses the same Containerfile and unprivileged `developer`
-account. Configure your editor's container provider to use Podman. It mounts
-only the repository workspace—never an engine socket, host home directory,
-desktop session, or credential agent.
+account. Configure your editor's container provider to use Podman. The checked-in
+configuration has no project-declared credential or engine-socket mounts and
+mounts only the repository workspace; it does not declare the host home or
+desktop session either. Some editor providers can independently forward Git
+credentials or an SSH agent. For strict isolation, inspect and disable
+provider-added credential forwarding in the editor provider.
 
 ## Test-driven changes
 

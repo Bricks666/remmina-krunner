@@ -33,7 +33,8 @@ jobs:
           set -euo pipefail
           command -v podman
           podman --version
-          podman info --format '{{.Host.Security.Rootless}}'
+          rootless=$(podman info --format '{{.Host.Security.Rootless}}')
+          [[ "${rootless}" == true ]]
 
       - name: Resolve diff base
         id: diff-base
