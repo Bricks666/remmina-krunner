@@ -185,7 +185,7 @@ stop_installed_runner() {
 }
 
 directories=("${binary_path%/*}" "${plugin_path%/*}" "${desktop_path%/*}" "${service_path%/*}")
-mkdir -p -m 0755 -- "${directories[@]}"
+created_directories=()
 staged_paths=("" "" "" "")
 backup_paths=("" "" "" "")
 had_original=(0 0 0 0)
@@ -211,12 +211,53 @@ cleanup() {
         [[ -z ${staged_paths[index]} || ! -e ${staged_paths[index]} ]] || rm -f -- "${staged_paths[index]}" || status=74
         [[ -z ${backup_paths[index]} || ! -e ${backup_paths[index]} ]] || rm -f -- "${backup_paths[index]}" || status=74
     done
+    local directory
+    for directory in "${created_directories[@]}"; do
+        if [[ -d ${directory} && ! -L ${directory} ]]; then
+            rmdir -- "${directory}" 2>/dev/null || true
+        fi
+    done
     exit "${status}"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+record_created_directory() {
+    local candidate=$1 candidate_slashes candidate_depth existing existing_slashes
+    local inserted=0
+    local -a ordered=()
+    for existing in "${created_directories[@]}"; do
+        [[ ${existing} != "${candidate}" ]] || return 0
+    done
+    candidate_slashes=${candidate//[^\/]/}
+    candidate_depth=${#candidate_slashes}
+    for existing in "${created_directories[@]}"; do
+        existing_slashes=${existing//[^\/]/}
+        if [[ ${inserted} == 0 && ${candidate_depth} -gt ${#existing_slashes} ]]; then
+            ordered+=("${candidate}")
+            inserted=1
+        fi
+        ordered+=("${existing}")
+    done
+    [[ ${inserted} == 1 ]] || ordered+=("${candidate}")
+    created_directories=("${ordered[@]}")
+}
+
+record_missing_directory_components() {
+    local candidate=$1 parent
+    while [[ ${candidate} != / && ! -e ${candidate} && ! -L ${candidate} ]]; do
+        record_created_directory "${candidate}"
+        parent=${candidate%/*}
+        candidate=${parent:-/}
+    done
+}
+
+for directory in "${directories[@]}"; do
+    record_missing_directory_components "${directory}"
+done
+mkdir -p -m 0755 -- "${directories[@]}"
 
 for index in 0 1 2 3; do
     staged_paths[index]=$(mktemp "${destination_paths[index]%/*}/.${destination_paths[index]##*/}.stage.XXXXXX")
@@ -225,8 +266,19 @@ install -m 0755 -- "${payload_binary}" "${staged_paths[0]}"
 install -m 0755 -- "${payload_plugin}" "${staged_paths[1]}"
 install -m 0644 -- "${payload_desktop}" "${staged_paths[2]}"
 install -m 0644 /dev/null "${staged_paths[3]}"
-escaped_binary=${binary_path//\/\\\\}
-escaped_binary=${escaped_binary//"/\\"}
+escape_dbus_exec_argument() {
+    local value=$1 result= character index
+    for ((index = 0; index < ${#value}; ++index)); do
+        character=${value:index:1}
+        case ${character} in
+            \\) result+='\\\\' ;;
+            '"') result+='\\"' ;;
+            *) result+="${character}" ;;
+        esac
+    done
+    printf '%s' "${result}"
+}
+escaped_binary=$(escape_dbus_exec_argument "${binary_path}")
 while IFS= read -r line || [[ -n ${line} ]]; do
     if [[ ${line} == Exec=* ]]; then
         printf 'Exec="%s"\n' "${escaped_binary}" >>"${staged_paths[3]}"
@@ -255,6 +307,7 @@ for index in 0 1 2 3; do
     [[ -z ${backup_paths[index]} ]] || rm -f -- "${backup_paths[index]}"
     backup_paths[index]=
 done
+created_directories=()
 
 post_status=0
 if ! "${binary_path}" --rescan; then

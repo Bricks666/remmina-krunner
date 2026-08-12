@@ -205,6 +205,7 @@ add_test(NAME package_scripts
 set_tests_properties(package_scripts PROPERTIES TIMEOUT 45)
 
 add_executable(package_runner_helper package_runner_helper.cpp)
+target_link_libraries(package_runner_helper PRIVATE Qt6::Core Qt6::DBus)
 
 add_test(NAME install_inventory
     COMMAND ${CMAKE_COMMAND}

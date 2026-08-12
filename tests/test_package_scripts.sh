@@ -151,13 +151,59 @@ mkdir -p -- "${custom_home}" "${custom_data}" "${custom_prefix}"
 run_install "${bundle}" "${custom_home}" "${custom_data}" "${custom_prefix}"
 custom_service=${custom_data}/dbus-1/services/org.remminakrunner.KRunner.service
 grep -Fq 'Exec="' "${custom_service}" || fail "service Exec is not quoted"
-escaped_custom_binary=${custom_prefix}/bin/remmina-krunner
-escaped_custom_binary=${escaped_custom_binary//\/\\\\}
-escaped_custom_binary=${escaped_custom_binary//"/\\"}
-expected_exec="Exec=\"${escaped_custom_binary}\""
+expected_exec='Exec="'"${root}"'/local prefix \\"quote\\" \\\\slash/bin/remmina-krunner"'
 [[ $(grep '^Exec=' "${custom_service}") == "${expected_exec}" ]] || fail "hostile custom-prefix Exec escaping differs"
 [[ -f ${custom_prefix}/bin/remmina-krunner ]] || fail "custom-prefix runner missing"
 [[ -f ${custom_prefix}/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so ]] || fail "custom-prefix plugin missing"
+
+# Exercise the GLib key-file and D-Bus activation parsing layers. The activated
+# process must be the executable installed at the hostile path, not any helper
+# found through PATH.
+activation_marker=${root}/activation-path
+HOME=${custom_home} XDG_DATA_HOME=${custom_data} \
+    XDG_DATA_DIRS="${custom_data}:/usr/local/share:/usr/share" \
+    PACKAGE_HELPER_ACTIVATION_LOG=${activation_marker} \
+    TEST_ACTIVATION_MARKER=${activation_marker} \
+    TEST_ACTIVATION_BINARY=${custom_prefix}/bin/remmina-krunner \
+    timeout 15 dbus-run-session -- /usr/bin/bash -euo pipefail -c '
+        activated_pid=
+        cleanup_activation() {
+            if [[ ${activated_pid:-} =~ ^[0-9]+$ ]] &&
+               [[ -e /proc/${activated_pid}/exe ]] &&
+               [[ /proc/${activated_pid}/exe -ef "${TEST_ACTIVATION_BINARY}" ]]; then
+                kill -TERM "${activated_pid}" 2>/dev/null || true
+            fi
+        }
+        trap cleanup_activation EXIT
+        gdbus call --session --dest org.freedesktop.DBus \
+            --object-path /org/freedesktop/DBus \
+            --method org.freedesktop.DBus.StartServiceByName \
+            org.remminakrunner.KRunner 0 >/dev/null
+        for _ in {1..100}; do [[ -s ${TEST_ACTIVATION_MARKER} ]] && break; sleep 0.01; done
+        [[ -s ${TEST_ACTIVATION_MARKER} ]]
+        [[ $(<"${TEST_ACTIVATION_MARKER}") == "${TEST_ACTIVATION_BINARY}" ]]
+        reply=$(gdbus call --session --dest org.freedesktop.DBus \
+            --object-path /org/freedesktop/DBus \
+            --method org.freedesktop.DBus.GetConnectionUnixProcessID \
+            org.remminakrunner.KRunner)
+        activated_pid=$(sed -n "s/.*uint32 \([0-9][0-9]*\).*/\1/p" <<<"${reply}")
+        [[ ${activated_pid} =~ ^[0-9]+$ ]]
+        [[ /proc/${activated_pid}/exe -ef "${TEST_ACTIVATION_BINARY}" ]]
+    '
+
+# A failed first install restores the complete destination tree, including
+# directory components created while preparing the transaction.
+first_failure_root=${root}/first-failure-root
+mkdir -p -- "${first_failure_root}/home"
+first_before=$(snapshot "${first_failure_root}")
+first_mv_count=${root}/first-mv-count
+if FAKE_MV_FAIL_AT=2 FAKE_MV_COUNT_FILE=${first_mv_count} \
+    run_install "${bundle}" "${first_failure_root}/home"; then
+    fail "first-install transaction failure succeeded"
+fi
+first_after=$(snapshot "${first_failure_root}")
+[[ ${first_before} == "${first_after}" ]] ||
+    fail "first-install rollback did not restore the complete tree"
 
 # Reinstall atomically replaces all four exact owned files and invokes rescan.
 printf 'replacement plugin\n' >"${bundle}/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so"
@@ -204,17 +250,6 @@ if FAKE_MV_FAIL_AT=6 FAKE_MV_COUNT_FILE=${mv_count} run_install "${bundle}" "${r
 fi
 after=$(snapshot "${rollback_root}")
 [[ ${before} == "${after}" ]] || fail "transaction rollback did not restore all files"
-
-first_failure_root=${root}/first-failure-root
-mkdir -p -- "${first_failure_root}/home"
-first_before=$(snapshot "${first_failure_root}")
-rm -f -- "${mv_count}"
-if FAKE_MV_FAIL_AT=2 FAKE_MV_COUNT_FILE=${mv_count} \
-    run_install "${bundle}" "${first_failure_root}/home"; then
-    fail "first-install transaction failure succeeded"
-fi
-find "${first_failure_root}" -type f -print -quit | grep -q . &&
-    fail "first-install rollback left project-owned files"
 
 # A concurrent installer for this user is rejected while the first owns the lock.
 concurrent_root=${root}/concurrent-root
