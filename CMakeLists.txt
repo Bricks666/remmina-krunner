@@ -17,6 +17,25 @@ list(APPEND CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 set(QT_MAJOR_VERSION 6)
 include(KDEInstallDirs6)
 
+if(KDE_INSTALL_PLUGINDIR STREQUAL "" OR IS_ABSOLUTE "${KDE_INSTALL_PLUGINDIR}")
+    message(FATAL_ERROR "KDE_INSTALL_PLUGINDIR must be a nonempty relative path")
+endif()
+cmake_path(NORMAL_PATH KDE_INSTALL_PLUGINDIR
+    OUTPUT_VARIABLE REMMINA_KRUNNER_NORMALIZED_PLUGINDIR)
+if(NOT REMMINA_KRUNNER_NORMALIZED_PLUGINDIR STREQUAL KDE_INSTALL_PLUGINDIR)
+    message(FATAL_ERROR "KDE_INSTALL_PLUGINDIR must be normalized")
+endif()
+set(REMMINA_KRUNNER_PLUGIN_RELATIVE
+    "${KDE_INSTALL_PLUGINDIR}/kf6/krunner/kcms/kcm_remmina_krunner.so")
+cmake_path(NORMAL_PATH REMMINA_KRUNNER_PLUGIN_RELATIVE
+    OUTPUT_VARIABLE REMMINA_KRUNNER_NORMALIZED_PLUGIN_RELATIVE)
+if(NOT REMMINA_KRUNNER_NORMALIZED_PLUGIN_RELATIVE STREQUAL
+       REMMINA_KRUNNER_PLUGIN_RELATIVE)
+    message(FATAL_ERROR "configured KRunner plugin path must be normalized")
+endif()
+configure_file(cmake/RemminaKRunnerInstallLayout.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/RemminaKRunnerInstallLayout.cmake @ONLY)
+
 include(CTest)
 
 find_package(Qt6 6.7 REQUIRED COMPONENTS Core DBus Widgets)
@@ -76,6 +95,11 @@ configure_file(
     ${CMAKE_CURRENT_BINARY_DIR}/org.remminakrunner.KRunner.desktop
     @ONLY
 )
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/packaging)
+configure_file(packaging/install.sh
+    ${CMAKE_CURRENT_BINARY_DIR}/packaging/install.sh @ONLY)
+configure_file(packaging/uninstall.sh
+    ${CMAKE_CURRENT_BINARY_DIR}/packaging/uninstall.sh @ONLY)
 configure_file(
     data/org.remminakrunner.KRunner.service.in
     ${CMAKE_CURRENT_BINARY_DIR}/org.remminakrunner.KRunner.service
@@ -89,7 +113,11 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.remminakrunner.KRunner.desktop
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.remminakrunner.KRunner.service
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/dbus-1/services
 )
-install(PROGRAMS packaging/install.sh packaging/uninstall.sh DESTINATION .)
+install(PROGRAMS
+    ${CMAKE_CURRENT_BINARY_DIR}/packaging/install.sh
+    ${CMAKE_CURRENT_BINARY_DIR}/packaging/uninstall.sh
+    DESTINATION .
+)
 install(FILES LICENSE DESTINATION .)
 install(FILES LICENSES/0BSD.txt LICENSES/LGPL-2.0-or-later.txt
     DESTINATION LICENSES

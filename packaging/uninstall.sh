@@ -28,7 +28,8 @@ data_home=${XDG_DATA_HOME:-${home_directory}/.local/share}
 validate_path XDG_DATA_HOME "${data_home}"
 
 binary_path=${install_prefix}/bin/remmina-krunner
-plugin_path=${install_prefix}/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so
+plugin_relative=@REMMINA_KRUNNER_PLUGIN_RELATIVE@
+plugin_path=${install_prefix}/${plugin_relative}
 desktop_path=${data_home}/krunner/dbusplugins/org.remminakrunner.KRunner.desktop
 service_path=${data_home}/dbus-1/services/org.remminakrunner.KRunner.service
 owned_paths=("${binary_path}" "${plugin_path}" "${desktop_path}" "${service_path}")

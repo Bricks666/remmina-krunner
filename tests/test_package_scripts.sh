@@ -6,6 +6,7 @@ set -euo pipefail
 installer=${1:?installer path required}
 uninstaller=${2:?uninstaller path required}
 runner=${3:?runner path required}
+plugin_relative=${4:?configured plugin-relative path required}
 root=$(mktemp -d /tmp/remmina-krunner-package-test.XXXXXX)
 case ${root} in /tmp/remmina-krunner-package-test.*) ;; *) exit 1 ;; esac
 cleanup() {
@@ -85,6 +86,19 @@ EOF
 cat >"${fake_bin}/mv" <<'EOF'
 #!/usr/bin/bash
 printf 'mv %s\n' "$*" >>"${FAKE_CALL_LOG:?}"
+destination=${@: -1}
+destination_name=${destination##*/}
+if [[ ${FAKE_MV_SIGNAL_BEFORE_BACKUP:-0} == 1 &&
+      ${destination_name} == *.backup.* ]]; then
+    kill -TERM "${PPID}"
+    exit 143
+fi
+if [[ ${FAKE_MV_SIGNAL_AFTER_REPLACEMENT:-0} == 1 &&
+      ${destination_name} == remmina-krunner ]]; then
+    /usr/bin/mv "$@" || exit $?
+    kill -TERM "${PPID}"
+    exit 143
+fi
 count=0
 [[ ! -f ${FAKE_MV_COUNT_FILE:-/nonexistent} ]] || read -r count <"${FAKE_MV_COUNT_FILE}"
 count=$((count + 1))
@@ -97,11 +111,11 @@ chmod 0755 "${fake_bin}"/{uname,ldd,kbuildsycoca6,kquitapp6,mkdir,mv}
 make_bundle() {
     local bundle=$1 payload=${2:-${runner}}
     mkdir -p -- "${bundle}/bin" \
-        "${bundle}/lib64/plugins/kf6/krunner/kcms" \
+        "${bundle}/${plugin_relative%/*}" \
         "${bundle}/share/dbus-1/services" \
         "${bundle}/share/krunner/dbusplugins" "${bundle}/LICENSES"
     cp -- "${payload}" "${bundle}/bin/remmina-krunner"
-    printf 'plugin\n' >"${bundle}/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so"
+    printf 'plugin\n' >"${bundle}/${plugin_relative}"
     printf '[Desktop Entry]\nType=Service\n' >"${bundle}/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop"
     printf '[D-BUS Service]\nName=org.remminakrunner.KRunner\nExec="/staged/bin/remmina-krunner"\n' \
         >"${bundle}/share/dbus-1/services/org.remminakrunner.KRunner.service"
@@ -111,7 +125,7 @@ make_bundle() {
     cp -- "${installer}" "${bundle}/install.sh"
     cp -- "${uninstaller}" "${bundle}/uninstall.sh"
     chmod 0755 "${bundle}/bin/remmina-krunner" "${bundle}/install.sh" "${bundle}/uninstall.sh"
-    chmod 0755 "${bundle}/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so"
+    chmod 0755 "${bundle}/${plugin_relative}"
     chmod 0644 "${bundle}/share/dbus-1/services/org.remminakrunner.KRunner.service" \
         "${bundle}/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop" \
         "${bundle}/LICENSE" "${bundle}/LICENSES/0BSD.txt" "${bundle}/LICENSES/LGPL-2.0-or-later.txt"
@@ -125,6 +139,8 @@ run_install() {
         PACKAGE_HELPER_BLOCK_RELEASE=${PACKAGE_HELPER_BLOCK_RELEASE:-} \
         FAKE_LDD_MISSING=${FAKE_LDD_MISSING:-0} FAKE_MV_FAIL_AT=${FAKE_MV_FAIL_AT:-0} \
         FAKE_MV_COUNT_FILE=${FAKE_MV_COUNT_FILE:-} \
+        FAKE_MV_SIGNAL_BEFORE_BACKUP=${FAKE_MV_SIGNAL_BEFORE_BACKUP:-0} \
+        FAKE_MV_SIGNAL_AFTER_REPLACEMENT=${FAKE_MV_SIGNAL_AFTER_REPLACEMENT:-0} \
         FAKE_MKDIR_RACE_PATH=${FAKE_MKDIR_RACE_PATH:-} \
         FAKE_MKDIR_RACE_MARKER=${FAKE_MKDIR_RACE_MARKER:-} \
         PATH="${fake_bin}:/usr/bin:/bin" /usr/bin/bash "${bundle}/install.sh"
@@ -144,7 +160,7 @@ make_bundle "${bundle}"
 mkdir -p -- "${home}"
 run_install "${bundle}" "${home}"
 binary=${home}/.local/bin/remmina-krunner
-plugin=${home}/.local/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so
+plugin=${home}/.local/${plugin_relative}
 desktop=${home}/.local/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop
 service=${home}/.local/share/dbus-1/services/org.remminakrunner.KRunner.service
 assert_mode "${binary}" 755
@@ -152,7 +168,8 @@ assert_mode "${plugin}" 755
 assert_mode "${desktop}" 644
 assert_mode "${service}" 644
 mapfile -t files < <(find "${home}" -type f -printf '%P\n' | LC_ALL=C sort)
-expected=(.local/bin/remmina-krunner .local/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so .local/share/dbus-1/services/org.remminakrunner.KRunner.service .local/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop)
+expected=(.local/bin/remmina-krunner ".local/${plugin_relative}" .local/share/dbus-1/services/org.remminakrunner.KRunner.service .local/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop)
+mapfile -t expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
 [[ ${files[*]} == "${expected[*]}" ]] || fail "default runtime inventory differs: ${files[*]}"
 [[ $(grep -c '^--rescan$' "${helper_log}") == 1 ]] || fail "initial --rescan was not invoked exactly once"
 
@@ -170,7 +187,7 @@ grep -Fq 'Exec="' "${custom_service}" || fail "service Exec is not quoted"
 expected_exec='Exec="'"${root}"'/local prefix \\"quote\\" \\\\slash/bin/remmina-krunner"'
 [[ $(grep '^Exec=' "${custom_service}") == "${expected_exec}" ]] || fail "hostile custom-prefix Exec escaping differs"
 [[ -f ${custom_prefix}/bin/remmina-krunner ]] || fail "custom-prefix runner missing"
-[[ -f ${custom_prefix}/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so ]] || fail "custom-prefix plugin missing"
+[[ -f ${custom_prefix}/${plugin_relative} ]] || fail "custom-prefix plugin missing"
 
 # Exercise the GLib key-file and D-Bus activation parsing layers. The activated
 # process must be the executable installed at the hostile path, not any helper
@@ -244,7 +261,7 @@ find "${mkdir_race_path}" -mindepth 1 -print -quit | grep -q . &&
     fail "rollback left installer-owned entries in the external directory"
 
 # Reinstall atomically replaces all four exact owned files and invokes rescan.
-printf 'replacement plugin\n' >"${bundle}/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so"
+printf 'replacement plugin\n' >"${bundle}/${plugin_relative}"
 : >"${calls}"
 run_install "${bundle}" "${home}"
 grep -Fq replacement "${plugin}" || fail "repeat install did not replace plugin"
@@ -281,13 +298,42 @@ rollback_root=${root}/rollback-root
 mkdir -p -- "${rollback_root}/home"
 run_install "${bundle}" "${rollback_root}/home"
 before=$(snapshot "${rollback_root}")
-printf 'third plugin\n' >"${bundle}/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so"
+printf 'third plugin\n' >"${bundle}/${plugin_relative}"
 mv_count=${root}/mv-count
 if FAKE_MV_FAIL_AT=6 FAKE_MV_COUNT_FILE=${mv_count} run_install "${bundle}" "${rollback_root}/home"; then
     fail "injected transaction failure succeeded"
 fi
 after=$(snapshot "${rollback_root}")
 [[ ${before} == "${after}" ]] || fail "transaction rollback did not restore all files"
+
+# TERM between backup reservation and moving an existing destination must not
+# replace the original with the empty reservation file.
+signal_backup_root=${root}/signal-backup-root
+signal_backup_home=${signal_backup_root}/home
+mkdir -p -- "${signal_backup_home}"
+run_install "${bundle}" "${signal_backup_home}"
+signal_backup_before=$(snapshot "${signal_backup_root}")
+if FAKE_MV_SIGNAL_BEFORE_BACKUP=1 \
+    run_install "${bundle}" "${signal_backup_home}"; then
+    fail "backup-window TERM unexpectedly succeeded"
+fi
+signal_backup_after=$(snapshot "${signal_backup_root}")
+[[ ${signal_backup_before} == "${signal_backup_after}" ]] ||
+    fail "backup-window TERM did not preserve the complete original tree"
+
+# TERM after stage->destination rename but before bookkeeping must infer that
+# the first-install replacement completed and remove it during rollback.
+signal_replacement_root=${root}/signal-replacement-root
+signal_replacement_home=${signal_replacement_root}/home
+mkdir -p -- "${signal_replacement_home}"
+signal_replacement_before=$(snapshot "${signal_replacement_root}")
+if FAKE_MV_SIGNAL_AFTER_REPLACEMENT=1 \
+    run_install "${bundle}" "${signal_replacement_home}"; then
+    fail "replacement-window TERM unexpectedly succeeded"
+fi
+signal_replacement_after=$(snapshot "${signal_replacement_root}")
+[[ ${signal_replacement_before} == "${signal_replacement_after}" ]] ||
+    fail "replacement-window TERM left a partial first installation"
 
 # A concurrent installer for this user is rejected while the first owns the lock.
 concurrent_root=${root}/concurrent-root

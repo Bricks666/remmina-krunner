@@ -40,7 +40,7 @@ case $(uname -m) in x86_64|aarch64) ;; *) die "Unsupported Linux architecture" 6
 
 script_path=$(readlink -f -- "${BASH_SOURCE[0]}") || die "Unable to resolve installer path" 66
 package_root=${script_path%/*}
-plugin_relative=lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so
+plugin_relative=@REMMINA_KRUNNER_PLUGIN_RELATIVE@
 expected_files=(
     LICENSE
     LICENSES/0BSD.txt
@@ -55,15 +55,23 @@ expected_files=(
 mapfile -t actual_files < <(find "${package_root}" -mindepth 1 -type f -printf '%P\n' | LC_ALL=C sort)
 mapfile -t sorted_expected < <(printf '%s\n' "${expected_files[@]}" | LC_ALL=C sort)
 [[ ${actual_files[*]} == "${sorted_expected[*]}" ]] || die "Release bundle inventory is invalid" 66
+declare -A expected_directories=()
+for expected_file in "${expected_files[@]}"; do
+    expected_parent=${expected_file%/*}
+    while [[ ${expected_parent} != "${expected_file}" && ${expected_parent} != . ]]; do
+        expected_directories["${expected_parent}"]=1
+        next_parent=${expected_parent%/*}
+        [[ ${next_parent} != "${expected_parent}" ]] || break
+        expected_parent=${next_parent}
+    done
+done
 
 while IFS= read -r -d '' entry; do
     relative=${entry#"${package_root}"/}
     [[ ! -L ${entry} ]] || die "Release bundle contains a symbolic link: ${relative}" 66
     if [[ -d ${entry} ]]; then
-        case ${relative} in
-            LICENSES|bin|lib64|lib64/plugins|lib64/plugins/kf6|lib64/plugins/kf6/krunner|lib64/plugins/kf6/krunner/kcms|share|share/dbus-1|share/dbus-1/services|share/krunner|share/krunner/dbusplugins) ;;
-            *) die "Release bundle contains an unexpected directory: ${relative}" 66 ;;
-        esac
+        [[ ${expected_directories["${relative}"]:-0} == 1 ]] ||
+            die "Release bundle contains an unexpected directory: ${relative}" 66
     elif [[ -f ${entry} ]]; then
         [[ $(stat -c '%h' -- "${entry}") == 1 ]] ||
             die "Release bundle file must not be hard-linked: ${relative}" 66
@@ -189,27 +197,77 @@ created_directories=()
 staged_paths=("" "" "" "")
 backup_paths=("" "" "" "")
 had_original=(0 0 0 0)
-replacement_installed=(0 0 0 0)
+backup_intended=(0 0 0 0)
+original_moved=(0 0 0 0)
+replacement_intended=(0 0 0 0)
+replacement_moved=(0 0 0 0)
+replacement_identities=("" "" "" "")
 transaction_active=0
+preserve_backups=0
+
+rollback_transaction() {
+    local index destination backup stage current_identity rollback_ok=1
+    for index in 3 2 1 0; do
+        destination=${destination_paths[index]}
+        backup=${backup_paths[index]}
+        if [[ ${backup_intended[index]} == 1 ]]; then
+            if [[ -e ${backup} || -L ${backup} ]]; then
+                if [[ -e ${destination} || -L ${destination} ]]; then
+                    rm -f -- "${destination}" || rollback_ok=0
+                fi
+                if [[ ! -e ${destination} && ! -L ${destination} ]] &&
+                   mv -fT -- "${backup}" "${destination}"; then
+                    backup_paths[index]=
+                    backup_intended[index]=0
+                    original_moved[index]=0
+                else
+                    rollback_ok=0
+                fi
+            elif [[ -e ${destination} || -L ${destination} ]]; then
+                backup_paths[index]=
+                backup_intended[index]=0
+                original_moved[index]=0
+            else
+                rollback_ok=0
+            fi
+        elif [[ ${had_original[index]} == 0 &&
+                ${replacement_intended[index]} == 1 ]]; then
+            stage=${staged_paths[index]}
+            if [[ ! -e ${stage} && ! -L ${stage} &&
+                  ( -e ${destination} || -L ${destination} ) ]]; then
+                current_identity=$(stat -c '%d:%i' -- "${destination}") || current_identity=
+                if [[ -n ${current_identity} &&
+                      ${current_identity} == "${replacement_identities[index]}" ]]; then
+                    rm -f -- "${destination}" || rollback_ok=0
+                else
+                    rollback_ok=0
+                fi
+            fi
+        fi
+        replacement_intended[index]=0
+        replacement_moved[index]=0
+    done
+    [[ ${rollback_ok} == 1 ]]
+}
+
 cleanup() {
-    local status=$? index
+    local status=$? index rollback_status=0
     trap - EXIT
     set +e
     if [[ ${transaction_active} == 1 ]]; then
-        for index in 3 2 1 0; do
-            if [[ ${replacement_installed[index]} == 1 ]]; then
-                rm -f -- "${destination_paths[index]}"
-            fi
-            if [[ ${had_original[index]} == 1 &&
-                  ( -e ${backup_paths[index]} || -L ${backup_paths[index]} ) ]]; then
-                mv -fT -- "${backup_paths[index]}" "${destination_paths[index]}" || status=74
-                backup_paths[index]=
-            fi
-        done
+        rollback_transaction
+        rollback_status=$?
+        if [[ ${rollback_status} != 0 ]]; then
+            preserve_backups=1
+            echo "Rollback failed; original files may remain in bounded backup files beside their destinations." >&2
+            status=74
+        fi
     fi
     for index in 0 1 2 3; do
         [[ -z ${staged_paths[index]} || ! -e ${staged_paths[index]} ]] || rm -f -- "${staged_paths[index]}" || status=74
-        [[ -z ${backup_paths[index]} || ! -e ${backup_paths[index]} ]] || rm -f -- "${backup_paths[index]}" || status=74
+        if [[ ${preserve_backups} == 0 ]]; then
+            [[ -z ${backup_paths[index]} || ! -e ${backup_paths[index]} ]] || rm -f -- "${backup_paths[index]}" || status=74
+        fi
     done
     local directory_index directory
     for ((directory_index = ${#created_directories[@]} - 1;
@@ -287,6 +345,10 @@ while IFS= read -r line || [[ -n ${line} ]]; do
     fi
 done <"${payload_service}"
 
+for index in 0 1 2 3; do
+    replacement_identities[index]=$(stat -c '%d:%i' -- "${staged_paths[index]}")
+done
+
 stop_installed_runner
 transaction_active=1
 for index in 0 1 2 3; do
@@ -294,13 +356,16 @@ for index in 0 1 2 3; do
         had_original[index]=1
         backup_paths[index]=$(mktemp "${destination_paths[index]%/*}/.${destination_paths[index]##*/}.backup.XXXXXX")
         rm -f -- "${backup_paths[index]}"
+        backup_intended[index]=1
         mv -fT -- "${destination_paths[index]}" "${backup_paths[index]}"
+        original_moved[index]=1
     fi
 done
 for index in 0 1 2 3; do
+    replacement_intended[index]=1
     mv -fT -- "${staged_paths[index]}" "${destination_paths[index]}"
     staged_paths[index]=
-    replacement_installed[index]=1
+    replacement_moved[index]=1
 done
 transaction_active=0
 for index in 0 1 2 3; do

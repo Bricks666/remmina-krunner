@@ -87,27 +87,11 @@ run_check() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     DESTDIR="${staging_directory}" cmake --install "${build_directory}"
-    local -a expected_inventory=(
-        usr/LICENSE
-        usr/LICENSES/0BSD.txt
-        usr/LICENSES/LGPL-2.0-or-later.txt
-        usr/bin/remmina-krunner
-        usr/install.sh
-        usr/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so
-        usr/share/dbus-1/services/org.remminakrunner.KRunner.service
-        usr/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop
-        usr/uninstall.sh
-    )
-    local -a actual_inventory=()
-    mapfile -t actual_inventory < <(
-        find "${staging_directory}" -mindepth 1 -type f -printf '%P\n' | LC_ALL=C sort
-    )
-    if [[ ${actual_inventory[*]} != "${expected_inventory[*]}" ]]; then
-        echo "Unexpected staged install inventory." >&2
-        printf 'Expected: %q\n' "${expected_inventory[@]}" >&2
-        printf 'Actual: %q\n' "${actual_inventory[@]}" >&2
-        exit 1
-    fi
+    cmake \
+        -DSTAGE_ROOT="${staging_directory}" \
+        -DINSTALL_PREFIX_RELATIVE=usr \
+        -DLAYOUT_FILE="${build_directory}/RemminaKRunnerInstallLayout.cmake" \
+        -P "${repository_root}/cmake/ValidateInstallInventory.cmake"
     cleanup_staging_directory
     trap - EXIT HUP INT TERM
 }

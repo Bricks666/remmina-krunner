@@ -5,51 +5,7 @@ if(NOT DEFINED MODE OR NOT DEFINED SOURCE_DIR)
     message(FATAL_ERROR "MODE and SOURCE_DIR are required")
 endif()
 
-function(assert_inventory root prefix libdir plugin_dir)
-    file(GLOB_RECURSE actual RELATIVE "${root}" LIST_DIRECTORIES false "${root}/*")
-    list(SORT actual)
-    set(expected
-        "${prefix}/LICENSE"
-        "${prefix}/LICENSES/0BSD.txt"
-        "${prefix}/LICENSES/LGPL-2.0-or-later.txt"
-        "${prefix}/bin/remmina-krunner"
-        "${prefix}/install.sh"
-        "${prefix}/${plugin_dir}/kcm_remmina_krunner.so"
-        "${prefix}/share/dbus-1/services/org.remminakrunner.KRunner.service"
-        "${prefix}/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop"
-        "${prefix}/uninstall.sh"
-    )
-    list(SORT expected)
-    if(NOT actual STREQUAL expected)
-        message(FATAL_ERROR "installed inventory differs\nexpected=${expected}\nactual=${actual}")
-    endif()
-
-    foreach(executable
-            "${root}/${prefix}/bin/remmina-krunner"
-            "${root}/${prefix}/install.sh"
-            "${root}/${prefix}/${plugin_dir}/kcm_remmina_krunner.so"
-            "${root}/${prefix}/uninstall.sh")
-        execute_process(COMMAND stat -c %a "${executable}"
-            OUTPUT_VARIABLE permissions OUTPUT_STRIP_TRAILING_WHITESPACE
-            RESULT_VARIABLE stat_status)
-        if(NOT stat_status EQUAL 0 OR NOT permissions STREQUAL "755")
-            message(FATAL_ERROR "expected mode 0755: ${executable} (${permissions})")
-        endif()
-    endforeach()
-    foreach(data_file
-            "${root}/${prefix}/LICENSE"
-            "${root}/${prefix}/LICENSES/0BSD.txt"
-            "${root}/${prefix}/LICENSES/LGPL-2.0-or-later.txt"
-            "${root}/${prefix}/share/dbus-1/services/org.remminakrunner.KRunner.service"
-            "${root}/${prefix}/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop")
-        execute_process(COMMAND stat -c %a "${data_file}"
-            OUTPUT_VARIABLE permissions OUTPUT_STRIP_TRAILING_WHITESPACE
-            RESULT_VARIABLE stat_status)
-        if(NOT stat_status EQUAL 0 OR NOT permissions STREQUAL "644")
-            message(FATAL_ERROR "expected mode 0644: ${data_file} (${permissions})")
-        endif()
-    endforeach()
-
+function(assert_activation root prefix)
     file(STRINGS
         "${root}/${prefix}/share/dbus-1/services/org.remminakrunner.KRunner.service"
         exec_lines REGEX "^Exec=")
@@ -64,8 +20,26 @@ function(assert_inventory root prefix libdir plugin_dir)
     endif()
 endfunction()
 
+function(run_inventory_validator root expect_success)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}"
+            -DSTAGE_ROOT=${root}
+            -DINSTALL_PREFIX_RELATIVE=${relative_prefix}
+            -DLAYOUT_FILE=${LAYOUT_FILE}
+            -P ${VALIDATOR}
+        RESULT_VARIABLE validation_status
+        OUTPUT_VARIABLE validation_output
+        ERROR_VARIABLE validation_error)
+    if(expect_success AND NOT validation_status EQUAL 0)
+        message(FATAL_ERROR
+            "exact install inventory validation failed:\n${validation_output}\n${validation_error}")
+    elseif(NOT expect_success AND validation_status EQUAL 0)
+        message(FATAL_ERROR "tampered install inventory was accepted")
+    endif()
+endfunction()
+
 if(MODE STREQUAL "inventory")
-    foreach(required BUILD_DIR INSTALL_PREFIX KDE_PLUGIN_DIR)
+    foreach(required BUILD_DIR INSTALL_PREFIX LAYOUT_FILE VALIDATOR)
         if(NOT DEFINED ${required})
             message(FATAL_ERROR "${required} is required")
         endif()
@@ -82,7 +56,17 @@ if(MODE STREQUAL "inventory")
     if(NOT install_status EQUAL 0)
         message(FATAL_ERROR "cmake --install failed:\n${install_output}\n${install_error}")
     endif()
-    assert_inventory("${stage}" "${relative_prefix}" "${INSTALL_LIBDIR}" "${KDE_PLUGIN_DIR}")
+    run_inventory_validator("${stage}" TRUE)
+    assert_activation("${stage}" "${relative_prefix}")
+
+    file(MAKE_DIRECTORY "${stage}/${relative_prefix}/unexpected-empty-directory")
+    run_inventory_validator("${stage}" FALSE)
+    file(REMOVE_RECURSE "${stage}/${relative_prefix}/unexpected-empty-directory")
+
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E create_symlink
+        "${stage}/${relative_prefix}/LICENSE"
+        "${stage}/${relative_prefix}/unexpected-symlink")
+    run_inventory_validator("${stage}" FALSE)
 elseif(MODE STREQUAL "build_testing_off")
     if(NOT DEFINED TEST_ROOT)
         message(FATAL_ERROR "TEST_ROOT is required")

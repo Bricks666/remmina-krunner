@@ -198,14 +198,25 @@ add_test(NAME ci_no_tests_error
 add_test(NAME package_scripts
     COMMAND ${TEST_BASH_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_scripts.sh
-        ${PROJECT_SOURCE_DIR}/packaging/install.sh
-        ${PROJECT_SOURCE_DIR}/packaging/uninstall.sh
+        ${PROJECT_BINARY_DIR}/packaging/install.sh
+        ${PROJECT_BINARY_DIR}/packaging/uninstall.sh
         $<TARGET_FILE:package_runner_helper>
+        ${REMMINA_KRUNNER_PLUGIN_RELATIVE}
 )
 set_tests_properties(package_scripts PROPERTIES TIMEOUT 45)
 
 add_executable(package_runner_helper package_runner_helper.cpp)
 target_link_libraries(package_runner_helper PRIVATE Qt6::Core Qt6::DBus)
+
+add_test(NAME package_scripts_layouts
+    COMMAND ${CMAKE_COMMAND}
+        -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DTEST_ROOT=${PROJECT_BINARY_DIR}/package-layouts-test
+        -DPACKAGE_TEST=${CMAKE_CURRENT_SOURCE_DIR}/test_package_scripts.sh
+        -DRUNNER_HELPER=$<TARGET_FILE:package_runner_helper>
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_package_layouts.cmake
+)
+set_tests_properties(package_scripts_layouts PROPERTIES TIMEOUT 90)
 
 add_test(NAME install_inventory
     COMMAND ${CMAKE_COMMAND}
@@ -213,7 +224,8 @@ add_test(NAME install_inventory
         -DBUILD_DIR=${PROJECT_BINARY_DIR}
         -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
         -DINSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
-        -DKDE_PLUGIN_DIR=${CMAKE_INSTALL_LIBDIR}/plugins/kf6/krunner/kcms
+        -DLAYOUT_FILE=${PROJECT_BINARY_DIR}/RemminaKRunnerInstallLayout.cmake
+        -DVALIDATOR=${PROJECT_SOURCE_DIR}/cmake/ValidateInstallInventory.cmake
         -P ${CMAKE_CURRENT_SOURCE_DIR}/test_install_inventory.cmake
 )
 set_tests_properties(install_inventory PROPERTIES TIMEOUT 30)

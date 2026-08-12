@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Remmina KRunner contributors
+# SPDX-License-Identifier: 0BSD
+
+set(REMMINA_KRUNNER_PLUGIN_RELATIVE
+    [[@REMMINA_KRUNNER_PLUGIN_RELATIVE@]])
