@@ -96,7 +96,8 @@ RemminaLaunchResult RemminaLauncher::connect(QStringView opaqueId,
             return failure(RemminaLaunchResult::MissingProfile);
         }
         const QString launchPath = record->launchPath;
-        if (launchPath.isEmpty() || containsNul(launchPath)) {
+        if (launchPath.isEmpty() || !QDir::isAbsolutePath(launchPath)
+            || containsNul(launchPath)) {
             return failure(RemminaLaunchResult::StartFailed);
         }
         QStringList arguments = instance.launcherPrefix;

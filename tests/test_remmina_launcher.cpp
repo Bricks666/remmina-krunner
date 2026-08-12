@@ -244,7 +244,8 @@ void RemminaLauncherTest::preservesHostileValuesAsInertArguments()
         QStringLiteral("`also-not-run`\\\nстрока"),
     };
     const QString hostilePath =
-        QStringLiteral("relative path;$(profile)`tick`\\line\nプロファイル.remmina");
+        QStringLiteral("/absolute path/quote\"single';$(profile)`tick`\\line\n"
+                       "プロファイル.remmina");
     harness.registry.value.instances = {
         makeInstance(QStringLiteral("hostile-id"), hostileProgram, hostilePrefix)};
     harness.registry.value.selectedId = QStringLiteral("hostile-id");
@@ -346,6 +347,10 @@ void RemminaLauncherTest::rejectsInvalidCommandsAndToken()
          QStringLiteral("/profile.remmina"),
          {}},
         {QStringLiteral("/usr/bin/remmina"), {}, {}, {}},
+        {QStringLiteral("/usr/bin/remmina"),
+         {},
+         QStringLiteral("relative/profile.remmina"),
+         {}},
         {QStringLiteral("/usr/bin/remmina"),
          {},
          withNul(QStringLiteral("/profile.remmina")),
