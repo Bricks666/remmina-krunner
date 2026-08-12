@@ -158,6 +158,36 @@ bundle=${root}/bundle
 home=${root}/home
 make_bundle "${bundle}"
 mkdir -p -- "${home}"
+
+# Rollback relies on rmdir to remove only directories created by this
+# transaction.  Exercise preflight with an isolated PATH that provides every
+# other declared dependency and cannot fall through to the host's rmdir.
+no_rmdir_bin=${root}/no-rmdir-bin
+mkdir -p -- "${no_rmdir_bin}"
+for tool in find install ldd mkdir mktemp mv readlink rm sleep sort stat uname kbuildsycoca6; do
+    ln -s -- "${fake_bin}/${tool}" "${no_rmdir_bin}/${tool}"
+done
+for tool in flock grep id; do
+    ln -s -- "/usr/bin/${tool}" "${no_rmdir_bin}/${tool}"
+done
+if (PATH="${no_rmdir_bin}"; command -v rmdir >/dev/null 2>&1); then
+    fail "isolated missing-rmdir PATH unexpectedly resolves rmdir"
+fi
+missing_rmdir_home=${root}/missing-rmdir-home
+mkdir -p -- "${missing_rmdir_home}"
+missing_rmdir_before=$(snapshot "${missing_rmdir_home}")
+if HOME=${missing_rmdir_home} XDG_CONFIG_HOME=${missing_rmdir_home}/.config \
+    FAKE_CALL_LOG=${calls} PACKAGE_HELPER_LOG=${helper_log} \
+    PATH="${no_rmdir_bin}" /usr/bin/bash "${bundle}/install.sh" \
+    >"${root}/missing-rmdir.out" 2>"${root}/missing-rmdir.err"; then
+    fail "missing rmdir dependency unexpectedly succeeded"
+fi
+missing_rmdir_after=$(snapshot "${missing_rmdir_home}")
+[[ ${missing_rmdir_before} == "${missing_rmdir_after}" ]] ||
+    fail "missing rmdir dependency mutated destinations"
+grep -Fq 'Required command is unavailable: rmdir' "${root}/missing-rmdir.err" ||
+    fail "missing rmdir dependency was not rejected by preflight"
+
 run_install "${bundle}" "${home}"
 binary=${home}/.local/bin/remmina-krunner
 plugin=${home}/.local/${plugin_relative}

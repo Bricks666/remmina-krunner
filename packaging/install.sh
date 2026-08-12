@@ -17,7 +17,7 @@ validate_path() {
 }
 require_commands() {
     local command_name
-    for command_name in find flock grep id install ldd mkdir mktemp mv readlink rm sleep sort stat uname kbuildsycoca6; do
+    for command_name in find flock grep id install ldd mkdir mktemp mv readlink rm rmdir sleep sort stat uname kbuildsycoca6; do
         command -v "${command_name}" >/dev/null 2>&1 ||
             die "Required command is unavailable: ${command_name}" 69
     done
