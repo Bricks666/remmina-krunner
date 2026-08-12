@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 Remmina KRunner contributors -->
+<!-- SPDX-License-Identifier: 0BSD -->
+
 # Release Draft Lookup Fix Design
 
 ## Problem
