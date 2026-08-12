@@ -3,8 +3,8 @@
 
 #pragma once
 
+#include "core/profile_locator.h"
 #include "core/profile_parser.h"
-#include "core/remmina_instance.h"
 
 #include <QHash>
 #include <QList>
@@ -23,6 +23,7 @@ struct FileFingerprint {
 struct ProfileSnapshot {
     QList<ProfileRecord> profiles;
     QList<FileFingerprint> fingerprint;
+    LocatedProfileDirectory directory;
 };
 
 enum class ProfileRepositoryError {

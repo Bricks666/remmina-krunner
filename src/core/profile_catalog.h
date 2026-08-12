@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "core/profile_locator.h"
 #include "core/profile_repository.h"
 #include "platform/profile_watcher.h"
 
@@ -11,8 +10,6 @@
 #include <QString>
 #include <QStringView>
 
-#include <functional>
-#include <optional>
 #include <variant>
 
 enum class ProfileCatalogError {
@@ -21,16 +18,11 @@ enum class ProfileCatalogError {
 };
 
 using CatalogResult = std::variant<QList<ProfileRecord>, ProfileCatalogError>;
-using ProfileDirectoryLocator =
-    std::function<std::optional<LocatedProfileDirectory>(const RemminaInstance &)>;
 
 class ProfileCatalog {
 public:
     // Dependencies are non-owning and must outlive the catalog.
     ProfileCatalog(ProfileRepositorySource &repository, ProfileWatcher &watcher);
-    ProfileCatalog(ProfileRepositorySource &repository,
-                   ProfileWatcher &watcher,
-                   ProfileDirectoryLocator locator);
     ~ProfileCatalog();
 
     ProfileCatalog(const ProfileCatalog &) = delete;
@@ -50,7 +42,6 @@ private:
 
     ProfileRepositorySource &repository_;
     ProfileWatcher &watcher_;
-    ProfileDirectoryLocator locator_;
     QList<ProfileRecord> records_;
     QString selectedInstanceId_;
     bool hasSelectedInstance_ = false;

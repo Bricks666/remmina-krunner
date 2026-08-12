@@ -409,6 +409,7 @@ RepositoryLoadResult ProfileRepository::load(const RemminaInstance &instance)
     QList<Candidate> candidates = std::get<QList<Candidate>>(std::move(enumeration));
 
     ProfileSnapshot snapshot;
+    snapshot.directory = directory;
     snapshot.profiles.reserve(candidates.size());
     snapshot.fingerprint.reserve(candidates.size());
     QSet<QString> activeCacheKeys;

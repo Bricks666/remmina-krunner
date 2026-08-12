@@ -7,6 +7,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace {
@@ -63,20 +64,9 @@ ProfileCatalogError mapRepositoryError(ProfileRepositoryError error)
 } // namespace
 
 ProfileCatalog::ProfileCatalog(ProfileRepositorySource &repository, ProfileWatcher &watcher)
-    : ProfileCatalog(repository, watcher, locateProfileDirectory)
-{
-}
-
-ProfileCatalog::ProfileCatalog(ProfileRepositorySource &repository,
-                               ProfileWatcher &watcher,
-                               ProfileDirectoryLocator locator)
     : repository_(repository)
     , watcher_(watcher)
-    , locator_(std::move(locator))
 {
-    if (!locator_) {
-        locator_ = locateProfileDirectory;
-    }
 }
 
 ProfileCatalog::~ProfileCatalog()
@@ -114,14 +104,8 @@ CatalogResult ProfileCatalog::records(const RemminaInstance &instance)
 
     ProfileSnapshot snapshot = std::get<ProfileSnapshot>(std::move(loadResult));
     records_ = std::move(snapshot.profiles);
-    const std::optional<LocatedProfileDirectory> directory = locator_(instance);
-    if (!directory.has_value()) {
-        watcher_.clear();
-        dirty_ = true;
-        return records_;
-    }
-
-    const std::optional<QStringList> paths = watchPaths(*directory, snapshot.fingerprint);
+    const std::optional<QStringList> paths =
+        watchPaths(snapshot.directory, snapshot.fingerprint);
     if (!paths.has_value()) {
         watcher_.clear();
         dirty_ = true;

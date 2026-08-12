@@ -184,6 +184,8 @@ void ProfileRepositoryTest::filtersSuffixAndFileTypesSortsAndDeduplicatesAliases
     QCOMPARE(QFileInfo(calls.at(1).sourcePath).fileName(), QStringLiteral("b.remmina"));
     QCOMPARE(snapshot.profiles.size(), 2);
     QCOMPARE(snapshot.fingerprint.size(), 2);
+    QCOMPARE(snapshot.directory.hostPath, directory);
+    QCOMPARE(snapshot.directory.launchPath, directory);
     QCOMPARE(snapshot.fingerprint.at(1).path, QFileInfo(zTarget).canonicalFilePath());
     QVERIFY(!snapshot.fingerprint.at(0).path.endsWith(QStringLiteral("upper.REMMINA")));
 }
@@ -209,6 +211,8 @@ void ProfileRepositoryTest::passesFlatpakHostAndLaunchPathsAndOpaqueIdsToParser(
     QCOMPARE(calls.constFirst().launchPath, source);
     QVERIFY(!calls.constFirst().opaqueId.isEmpty());
     QCOMPARE(snapshot.profiles.constFirst().opaqueId, calls.constFirst().opaqueId);
+    QCOMPARE(snapshot.directory.hostPath, directory);
+    QCOMPARE(snapshot.directory.launchPath, directory);
 }
 
 void ProfileRepositoryTest::skipsEveryParserErrorAndFingerprintsFailedProfiles()
@@ -273,13 +277,15 @@ void ProfileRepositoryTest::returnsEmptySnapshotForReadableEmptyDirectory()
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     const RemminaInstance instance = nativeInstance(temporary.path());
-    makeDirectory(profileDirectory(instance));
+    const QString directory = makeDirectory(profileDirectory(instance));
 
     ProfileRepository repository;
     const ProfileSnapshot &snapshot = snapshotFrom(repository.load(instance));
 
     QVERIFY(snapshot.profiles.isEmpty());
     QVERIFY(snapshot.fingerprint.isEmpty());
+    QCOMPARE(snapshot.directory.hostPath, directory);
+    QCOMPARE(snapshot.directory.launchPath, directory);
 }
 
 void ProfileRepositoryTest::equalSizeReplacementWithSamePublicMtimeReparses()

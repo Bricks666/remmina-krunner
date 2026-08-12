@@ -6,9 +6,9 @@
 #include "core/profile_catalog.h"
 
 #include <QDir>
+#include <QTemporaryDir>
 
 #include <functional>
-#include <optional>
 #include <utility>
 
 namespace {
@@ -48,13 +48,29 @@ FileFingerprint makeFingerprint(QString path)
     };
 }
 
+LocatedProfileDirectory located(QString hostPath)
+{
+    return {
+        .hostPath = std::move(hostPath),
+        .launchPath = QStringLiteral("/launch/profiles"),
+    };
+}
+
 ProfileSnapshot makeSnapshot(QList<ProfileRecord> profiles,
-                             QList<FileFingerprint> fingerprint = {})
+                             QList<FileFingerprint> fingerprint,
+                             LocatedProfileDirectory directory)
 {
     return {
         .profiles = std::move(profiles),
         .fingerprint = std::move(fingerprint),
+        .directory = std::move(directory),
     };
+}
+
+ProfileSnapshot makeSnapshot(QList<ProfileRecord> profiles,
+                             LocatedProfileDirectory directory)
+{
+    return makeSnapshot(std::move(profiles), {}, std::move(directory));
 }
 
 QList<ProfileRecord> requireRecords(CatalogResult result)
@@ -135,36 +151,6 @@ private:
     qsizetype nextResult_ = 0;
 };
 
-struct FakeLocator {
-    explicit FakeLocator(QList<std::optional<LocatedProfileDirectory>> queuedResults = {})
-        : results(std::move(queuedResults))
-    {
-    }
-
-    std::optional<LocatedProfileDirectory> operator()(const RemminaInstance &instance)
-    {
-        calls.append(instance.id);
-        if (nextResult_ >= results.size()) {
-            qFatal("Unexpected profile-directory lookup");
-        }
-        return results.at(nextResult_++);
-    }
-
-    QList<std::optional<LocatedProfileDirectory>> results;
-    QStringList calls;
-
-private:
-    qsizetype nextResult_ = 0;
-};
-
-LocatedProfileDirectory located(QString hostPath)
-{
-    return {
-        .hostPath = std::move(hostPath),
-        .launchPath = QStringLiteral("/launch/profiles"),
-    };
-}
-
 } // namespace
 
 class ProfileCatalogTest : public QObject {
@@ -182,7 +168,8 @@ private slots:
     void repositoryErrorsClearStateMapExactlyAndRetry();
     void emptySnapshotStillWatchesSelectedDirectory();
     void watcherSetupFailureServesFreshRecordsAndRetriesUntilSafe();
-    void directoryLookupRaceServesFreshRecordsAndRetriesUntilSafe();
+    void snapshotProvenanceWinsWhenInstanceNowPointsElsewhere();
+    void invalidSnapshotProvenanceServesFreshRecordsAndRetriesUntilSafe();
     void resolveUsesOnlyCurrentRecordsAndChoosesFirstDuplicate();
 };
 
@@ -190,19 +177,16 @@ void ProfileCatalogTest::constructorIsLazyAndDestructorClearsWatcher()
 {
     FakeRepository repository;
     FakeWatcher watcher;
-    FakeLocator locator;
     {
-        ProfileCatalog catalog(repository, watcher, std::ref(locator));
+        ProfileCatalog catalog(repository, watcher);
 
         QCOMPARE(repository.calls.size(), 0);
-        QCOMPARE(locator.calls.size(), 0);
         QCOMPARE(watcher.replacements.size(), 0);
         QCOMPARE(watcher.clearCount, 0);
         QVERIFY(catalog.resolve(u"never-loaded") == nullptr);
     }
 
     QCOMPARE(repository.calls.size(), 0);
-    QCOMPARE(locator.calls.size(), 0);
     QCOMPARE(watcher.clearCount, 1);
     QVERIFY(watcher.paths.isEmpty());
     QVERIFY(!watcher.callback);
@@ -218,17 +202,16 @@ void ProfileCatalogTest::firstLookupLoadsOnceAndWatchesCompleteDeterministicSet(
             makeFingerprint(QStringLiteral("/profiles/selected/sub/../a.remmina")),
             makeFingerprint(QStringLiteral("/profiles/selected/a.remmina")),
             makeFingerprint(QStringLiteral("/profiles/selected/malformed.remmina")),
-        })};
+        },
+        located(QStringLiteral("/profiles/selected/./")))};
     FakeWatcher watcher;
-    FakeLocator locator{{located(QStringLiteral("/profiles/selected/./"))}};
-    ProfileCatalog catalog(repository, watcher, std::ref(locator));
+    ProfileCatalog catalog(repository, watcher);
     const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
 
     const QList<ProfileRecord> records = requireRecords(catalog.records(instance));
 
     QCOMPARE(records.size(), 1);
     QCOMPARE(repository.calls, QStringList{instance.id});
-    QCOMPARE(locator.calls, QStringList{instance.id});
     QCOMPARE(watcher.replacements.size(), 1);
     QCOMPARE(watcher.paths,
              QStringList({
@@ -242,10 +225,10 @@ void ProfileCatalogTest::firstLookupLoadsOnceAndWatchesCompleteDeterministicSet(
 void ProfileCatalogTest::sameSessionReusesRecordsAcrossLookupsAndResolve()
 {
     FakeRepository repository;
-    repository.results = {makeSnapshot({makeRecord(QStringLiteral("one"))})};
+    repository.results = {makeSnapshot({makeRecord(QStringLiteral("one"))},
+                                       located(QStringLiteral("/profiles/one")))};
     FakeWatcher watcher;
-    FakeLocator locator{{located(QStringLiteral("/profiles/one"))}};
-    ProfileCatalog catalog(repository, watcher, std::ref(locator));
+    ProfileCatalog catalog(repository, watcher);
     const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
 
     requireRecords(catalog.records(instance));
@@ -253,7 +236,6 @@ void ProfileCatalogTest::sameSessionReusesRecordsAcrossLookupsAndResolve()
     requireRecords(catalog.records(instance));
 
     QCOMPARE(repository.calls.size(), 1);
-    QCOMPARE(locator.calls.size(), 1);
     QCOMPARE(watcher.replacements.size(), 1);
     QVERIFY(catalog.resolve(u"one") != nullptr);
     QCOMPARE(catalog.resolve(u"one")->opaqueId, QStringLiteral("one"));
@@ -264,13 +246,13 @@ void ProfileCatalogTest::explicitDirtyDefersReloadUntilNextLookup()
 {
     FakeRepository repository;
     repository.results = {
-        makeSnapshot({makeRecord(QStringLiteral("one"))}),
-        makeSnapshot({makeRecord(QStringLiteral("two"))}),
+        makeSnapshot({makeRecord(QStringLiteral("one"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("two"))},
+                     located(QStringLiteral("/profiles/one"))),
     };
     FakeWatcher watcher;
-    FakeLocator locator{{located(QStringLiteral("/profiles/one")),
-                         located(QStringLiteral("/profiles/one"))}};
-    ProfileCatalog catalog(repository, watcher, std::ref(locator));
+    ProfileCatalog catalog(repository, watcher);
     const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
     requireRecords(catalog.records(instance));
 
@@ -287,13 +269,13 @@ void ProfileCatalogTest::watcherCallbackDefersReloadAndReplacesCurrentIds()
 {
     FakeRepository repository;
     repository.results = {
-        makeSnapshot({makeRecord(QStringLiteral("stale"))}),
-        makeSnapshot({makeRecord(QStringLiteral("fresh"))}),
+        makeSnapshot({makeRecord(QStringLiteral("stale"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("fresh"))},
+                     located(QStringLiteral("/profiles/one"))),
     };
     FakeWatcher watcher;
-    FakeLocator locator{{located(QStringLiteral("/profiles/one")),
-                         located(QStringLiteral("/profiles/one"))}};
-    ProfileCatalog catalog(repository, watcher, std::ref(locator));
+    ProfileCatalog catalog(repository, watcher);
     const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
     requireRecords(catalog.records(instance));
 
@@ -311,13 +293,13 @@ void ProfileCatalogTest::endSessionForcesRepositoryVerificationEvenWhenClean()
 {
     FakeRepository repository;
     repository.results = {
-        makeSnapshot({makeRecord(QStringLiteral("unchanged"))}),
-        makeSnapshot({makeRecord(QStringLiteral("unchanged"))}),
+        makeSnapshot({makeRecord(QStringLiteral("unchanged"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("unchanged"))},
+                     located(QStringLiteral("/profiles/one"))),
     };
     FakeWatcher watcher;
-    FakeLocator locator{{located(QStringLiteral("/profiles/one")),
-                         located(QStringLiteral("/profiles/one"))}};
-    ProfileCatalog catalog(repository, watcher, std::ref(locator));
+    ProfileCatalog catalog(repository, watcher);
     const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
     requireRecords(catalog.records(instance));
 
@@ -335,13 +317,13 @@ void ProfileCatalogTest::instanceSwitchClearsOldStateBeforeLoadingNewScope()
 {
     FakeRepository repository;
     repository.results = {
-        makeSnapshot({makeRecord(QStringLiteral("old"))}),
-        makeSnapshot({makeRecord(QStringLiteral("new"))}),
+        makeSnapshot({makeRecord(QStringLiteral("old"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("new"))},
+                     located(QStringLiteral("/profiles/two"))),
     };
     FakeWatcher watcher;
-    FakeLocator locator{{located(QStringLiteral("/profiles/one")),
-                         located(QStringLiteral("/profiles/two"))}};
-    ProfileCatalog catalog(repository, watcher, std::ref(locator));
+    ProfileCatalog catalog(repository, watcher);
     const RemminaInstance first = makeInstance(QStringLiteral("native:one"));
     const RemminaInstance second = makeInstance(QStringLiteral("native:two"));
     requireRecords(catalog.records(first));
@@ -366,20 +348,19 @@ void ProfileCatalogTest::resetClearsStateAndRemainsLazy()
 {
     FakeRepository repository;
     repository.results = {
-        makeSnapshot({makeRecord(QStringLiteral("before"))}),
-        makeSnapshot({makeRecord(QStringLiteral("after"))}),
+        makeSnapshot({makeRecord(QStringLiteral("before"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("after"))},
+                     located(QStringLiteral("/profiles/one"))),
     };
     FakeWatcher watcher;
-    FakeLocator locator{{located(QStringLiteral("/profiles/one")),
-                         located(QStringLiteral("/profiles/one"))}};
-    ProfileCatalog catalog(repository, watcher, std::ref(locator));
+    ProfileCatalog catalog(repository, watcher);
     const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
     requireRecords(catalog.records(instance));
 
     catalog.reset();
 
     QCOMPARE(repository.calls.size(), 1);
-    QCOMPARE(locator.calls.size(), 1);
     QVERIFY(catalog.resolve(u"before") == nullptr);
     QVERIFY(watcher.paths.isEmpty());
     requireRecords(catalog.records(instance));
@@ -399,14 +380,14 @@ void ProfileCatalogTest::repositoryErrorsClearStateMapExactlyAndRetry()
     for (const auto &[repositoryError, catalogError] : cases) {
         FakeRepository repository;
         repository.results = {
-            makeSnapshot({makeRecord(QStringLiteral("stale"))}),
+            makeSnapshot({makeRecord(QStringLiteral("stale"))},
+                         located(QStringLiteral("/profiles/one"))),
             repositoryError,
-            makeSnapshot({makeRecord(QStringLiteral("recovered"))}),
+            makeSnapshot({makeRecord(QStringLiteral("recovered"))},
+                         located(QStringLiteral("/profiles/one"))),
         };
         FakeWatcher watcher;
-        FakeLocator locator{{located(QStringLiteral("/profiles/one")),
-                             located(QStringLiteral("/profiles/one"))}};
-        ProfileCatalog catalog(repository, watcher, std::ref(locator));
+        ProfileCatalog catalog(repository, watcher);
         const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
         requireRecords(catalog.records(instance));
         catalog.markDirty();
@@ -426,10 +407,9 @@ void ProfileCatalogTest::repositoryErrorsClearStateMapExactlyAndRetry()
 void ProfileCatalogTest::emptySnapshotStillWatchesSelectedDirectory()
 {
     FakeRepository repository;
-    repository.results = {makeSnapshot({})};
+    repository.results = {makeSnapshot({}, located(QStringLiteral("/profiles/empty")))};
     FakeWatcher watcher;
-    FakeLocator locator{{located(QStringLiteral("/profiles/empty"))}};
-    ProfileCatalog catalog(repository, watcher, std::ref(locator));
+    ProfileCatalog catalog(repository, watcher);
 
     const QList<ProfileRecord> records =
         requireRecords(catalog.records(makeInstance(QStringLiteral("native:empty"))));
@@ -442,14 +422,14 @@ void ProfileCatalogTest::watcherSetupFailureServesFreshRecordsAndRetriesUntilSaf
 {
     FakeRepository repository;
     repository.results = {
-        makeSnapshot({makeRecord(QStringLiteral("first"))}),
-        makeSnapshot({makeRecord(QStringLiteral("second"))}),
+        makeSnapshot({makeRecord(QStringLiteral("first"))},
+                     located(QStringLiteral("/profiles/one"))),
+        makeSnapshot({makeRecord(QStringLiteral("second"))},
+                     located(QStringLiteral("/profiles/one"))),
     };
     FakeWatcher watcher;
     watcher.replaceResults = {false, true};
-    FakeLocator locator{{located(QStringLiteral("/profiles/one")),
-                         located(QStringLiteral("/profiles/one"))}};
-    ProfileCatalog catalog(repository, watcher, std::ref(locator));
+    ProfileCatalog catalog(repository, watcher);
     const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
 
     const QList<ProfileRecord> first = requireRecords(catalog.records(instance));
@@ -465,16 +445,44 @@ void ProfileCatalogTest::watcherSetupFailureServesFreshRecordsAndRetriesUntilSaf
     QCOMPARE(watcher.replacements.size(), 2);
 }
 
-void ProfileCatalogTest::directoryLookupRaceServesFreshRecordsAndRetriesUntilSafe()
+void ProfileCatalogTest::snapshotProvenanceWinsWhenInstanceNowPointsElsewhere()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString loadedDirectory = QDir(temporary.path()).filePath(QStringLiteral("a"));
+    const QString loadedProfile =
+        QDir(loadedDirectory).filePath(QStringLiteral("profile.remmina"));
+    const QString currentDirectory = QDir(temporary.path()).filePath(QStringLiteral("b"));
+    QVERIFY(QDir().mkpath(currentDirectory));
+    FakeRepository repository;
+    repository.results = {makeSnapshot(
+        {makeRecord(QStringLiteral("from-a"))},
+        {makeFingerprint(loadedProfile)},
+        located(loadedDirectory))};
+    FakeWatcher watcher;
+    ProfileCatalog catalog(repository, watcher);
+    RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+    instance.profiles.configHome = QDir(currentDirectory).filePath(QStringLiteral("config"));
+    instance.profiles.dataHome = QDir(currentDirectory).filePath(QStringLiteral("data"));
+    instance.profiles.legacyHome = currentDirectory;
+
+    requireRecords(catalog.records(instance));
+
+    QCOMPARE(watcher.paths, QStringList({loadedDirectory, loadedProfile}));
+    QVERIFY(!watcher.paths.contains(currentDirectory));
+    QCOMPARE(repository.calls.size(), 1);
+}
+
+void ProfileCatalogTest::invalidSnapshotProvenanceServesFreshRecordsAndRetriesUntilSafe()
 {
     FakeRepository repository;
     repository.results = {
-        makeSnapshot({makeRecord(QStringLiteral("first"))}),
-        makeSnapshot({makeRecord(QStringLiteral("second"))}),
+        makeSnapshot({makeRecord(QStringLiteral("first"))}, LocatedProfileDirectory{}),
+        makeSnapshot({makeRecord(QStringLiteral("second"))},
+                     located(QStringLiteral("/profiles/one"))),
     };
     FakeWatcher watcher;
-    FakeLocator locator{{std::nullopt, located(QStringLiteral("/profiles/one"))}};
-    ProfileCatalog catalog(repository, watcher, std::ref(locator));
+    ProfileCatalog catalog(repository, watcher);
     const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
 
     const QList<ProfileRecord> first = requireRecords(catalog.records(instance));
@@ -485,7 +493,6 @@ void ProfileCatalogTest::directoryLookupRaceServesFreshRecordsAndRetriesUntilSaf
     const QList<ProfileRecord> second = requireRecords(catalog.records(instance));
     QCOMPARE(second.constFirst().opaqueId, QStringLiteral("second"));
     QCOMPARE(repository.calls.size(), 2);
-    QCOMPARE(locator.calls.size(), 2);
     QCOMPARE(watcher.replacements.size(), 1);
     requireRecords(catalog.records(instance));
     QCOMPARE(repository.calls.size(), 2);
@@ -496,11 +503,11 @@ void ProfileCatalogTest::resolveUsesOnlyCurrentRecordsAndChoosesFirstDuplicate()
     FakeRepository repository;
     repository.results = {
         makeSnapshot({makeRecord(QStringLiteral("duplicate"), QStringLiteral("first")),
-                      makeRecord(QStringLiteral("duplicate"), QStringLiteral("second"))}),
+                      makeRecord(QStringLiteral("duplicate"), QStringLiteral("second"))},
+                     located(QStringLiteral("/profiles/one"))),
     };
     FakeWatcher watcher;
-    FakeLocator locator{{located(QStringLiteral("/profiles/one"))}};
-    ProfileCatalog catalog(repository, watcher, std::ref(locator));
+    ProfileCatalog catalog(repository, watcher);
 
     QVERIFY(catalog.resolve(u"duplicate") == nullptr);
     requireRecords(catalog.records(makeInstance(QStringLiteral("native:one"))));
