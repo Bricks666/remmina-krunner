@@ -57,10 +57,59 @@ run_tests() {
 
 run_check() {
     local build_directory="${repository_root}/build-ci"
-    configure_build "${build_directory}" Debug ON
+    configure_build "${build_directory}" Debug ON -DCMAKE_INSTALL_PREFIX=/usr
     cmake --build "${build_directory}" --parallel "${parallel_jobs}"
     QT_QPA_PLATFORM=offscreen \
         ctest --test-dir "${build_directory}" --no-tests=error --output-on-failure
+
+    local staging_directory
+    staging_directory=$(mktemp -d /tmp/remmina-krunner-install-stage.XXXXXX)
+    if [[ ! ${staging_directory} =~ ^/tmp/remmina-krunner-install-stage\.[[:alnum:]]{6}$ ||
+          ! -d ${staging_directory} || -L ${staging_directory} ]]; then
+        echo "Refusing unexpected install staging directory: ${staging_directory}" >&2
+        exit 1
+    fi
+    cleanup_staging_directory() {
+        if [[ -z ${staging_directory} ]]; then
+            return
+        fi
+        if [[ ${staging_directory} =~ ^/tmp/remmina-krunner-install-stage\.[[:alnum:]]{6}$ &&
+              -d ${staging_directory} && ! -L ${staging_directory} ]]; then
+            rm -rf -- "${staging_directory}"
+            staging_directory=
+        else
+            echo "Refusing unsafe install staging cleanup: ${staging_directory}" >&2
+            return 1
+        fi
+    }
+    trap cleanup_staging_directory EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    DESTDIR="${staging_directory}" cmake --install "${build_directory}"
+    local -a expected_inventory=(
+        usr/LICENSE
+        usr/LICENSES/0BSD.txt
+        usr/LICENSES/LGPL-2.0-or-later.txt
+        usr/bin/remmina-krunner
+        usr/install.sh
+        usr/lib64/plugins/kf6/krunner/kcms/kcm_remmina_krunner.so
+        usr/share/dbus-1/services/org.remminakrunner.KRunner.service
+        usr/share/krunner/dbusplugins/org.remminakrunner.KRunner.desktop
+        usr/uninstall.sh
+    )
+    local -a actual_inventory=()
+    mapfile -t actual_inventory < <(
+        find "${staging_directory}" -mindepth 1 -type f -printf '%P\n' | LC_ALL=C sort
+    )
+    if [[ ${actual_inventory[*]} != "${expected_inventory[*]}" ]]; then
+        echo "Unexpected staged install inventory." >&2
+        printf 'Expected: %q\n' "${expected_inventory[@]}" >&2
+        printf 'Actual: %q\n' "${actual_inventory[@]}" >&2
+        exit 1
+    fi
+    cleanup_staging_directory
+    trap - EXIT HUP INT TERM
 }
 
 run_sanitize() {

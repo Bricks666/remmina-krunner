@@ -89,6 +89,11 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.remminakrunner.KRunner.desktop
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.remminakrunner.KRunner.service
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/dbus-1/services
 )
+install(PROGRAMS packaging/install.sh packaging/uninstall.sh DESTINATION .)
+install(FILES LICENSE DESTINATION .)
+install(FILES LICENSES/0BSD.txt LICENSES/LGPL-2.0-or-later.txt
+    DESTINATION LICENSES
+)
 
 add_library(remmina_krunner_kcm STATIC
     src/kcm/instance_settings_model.cpp

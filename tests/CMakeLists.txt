@@ -194,3 +194,34 @@ add_test(NAME ci_no_tests_error
         ${CMAKE_CURRENT_SOURCE_DIR}/test_ci_no_tests_error.sh
         ${PROJECT_SOURCE_DIR}/scripts/ci.sh
 )
+
+add_test(NAME package_scripts
+    COMMAND ${TEST_BASH_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_scripts.sh
+        ${PROJECT_SOURCE_DIR}/packaging/install.sh
+        ${PROJECT_SOURCE_DIR}/packaging/uninstall.sh
+        $<TARGET_FILE:package_runner_helper>
+)
+set_tests_properties(package_scripts PROPERTIES TIMEOUT 45)
+
+add_executable(package_runner_helper package_runner_helper.cpp)
+
+add_test(NAME install_inventory
+    COMMAND ${CMAKE_COMMAND}
+        -DMODE=inventory
+        -DBUILD_DIR=${PROJECT_BINARY_DIR}
+        -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DINSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
+        -DKDE_PLUGIN_DIR=${CMAKE_INSTALL_LIBDIR}/plugins/kf6/krunner/kcms
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_install_inventory.cmake
+)
+set_tests_properties(install_inventory PROPERTIES TIMEOUT 30)
+
+add_test(NAME build_testing_off
+    COMMAND ${CMAKE_COMMAND}
+        -DMODE=build_testing_off
+        -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DTEST_ROOT=${PROJECT_BINARY_DIR}/build-testing-off-test
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_install_inventory.cmake
+)
+set_tests_properties(build_testing_off PROPERTIES TIMEOUT 120)
