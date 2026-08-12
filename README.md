@@ -9,16 +9,25 @@ Remmina's connection-creation window without linking to Remmina libraries.
 
 ## Installation
 
-The runtime needs Plasma 6, Qt 6.7 or newer, the matching KDE Frameworks 6
-libraries, D-Bus, and at least one supported Remmina installation. The source
-workflow additionally needs Git and rootless Podman; compilers and build tools
-stay in the checked-in Fedora 44 container image.
+The published release and `source-bundle` outputs are binary artifacts built in
+the pinned Fedora 44 container. They are supported only on Fedora Linux 44
+x86_64 with Plasma 6, matching Qt and KDE Frameworks 6 libraries, D-Bus, and at
+least one supported Remmina installation. Qt 6.7 is the compile-time API floor,
+not a cross-distribution binary compatibility guarantee. Other distributions
+require a distro-native container, package, and installation layout, which
+v0.1.0 does not provide. The current source bundle is not portable, and
+aarch64 is not part of the current binary release contract.
+
+The source workflow additionally needs Git and rootless Podman; compilers and
+build tools stay in the checked-in Fedora 44 container image.
 
 ### Install a verified release
 
 Once a release is published, download both the archive and its checksum from
 the same GitHub Release. For version `v0.1.0`, the exact asset names are
 `remmina-krunner-v0.1.0-linux-x86_64.tar.gz` and its matching `.sha256` file.
+The retained `linux-x86_64` asset name denotes the Fedora Linux 44 x86_64
+binary described above; it does not claim portability across Linux systems.
 Verify the checksum before extracting or running any bundled script:
 
 ```bash
@@ -34,9 +43,12 @@ tar -xzf "${archive}"
 
 The installer is user-local: it uses `$HOME/.local` and `XDG_DATA_HOME`, uses
 neither sudo nor a package manager, refreshes KDE's service cache, and asks the
-runner to rescan installed Remmina applications. A nonempty `XDG_DATA_HOME`
-must be an absolute normalized path. Keep the verified extracted bundle so its
-matching `uninstall.sh` is available later.
+runner to rescan installed Remmina applications. Before changing anything, it
+verifies Linux x86_64 and Fedora 44 identity fields in a regular
+`/etc/os-release`. Fedora's canonical `/etc/os-release` symlink to the regular
+`/usr/lib/os-release` is also accepted; alternate or chained links are not. A
+nonempty `XDG_DATA_HOME` must be an absolute normalized path. Keep the verified
+extracted bundle so its matching `uninstall.sh` is available later.
 
 ### Build from source
 
@@ -71,7 +83,8 @@ Installing a newer verified bundle performs an atomic user-local upgrade.
 For an upgrade, verify the new archive and checksum first, extract it, and run
 its `install.sh`; do not reuse scripts from a different version. To uninstall,
 run the `uninstall.sh` from a verified bundle with the same installation
-layout.
+layout. The uninstaller intentionally remains usable after a distribution or
+architecture upgrade so the exact runner-owned files can still be removed.
 
 ## Use
 

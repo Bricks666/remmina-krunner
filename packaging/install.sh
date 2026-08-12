@@ -15,6 +15,78 @@ validate_path() {
        ${value} != /etc && ${value} != /etc/* && ${value} != /var && ${value} != /var/* ]] ||
         die "${name} must identify a user-local path" 64
 }
+validate_os_release_override() {
+    local value=$1
+    [[ -n ${value} && ${value} == /* && ${value} != / &&
+       ${value} != *$'\n'* && ${value} != *$'\r'* &&
+       ${value} != *'/../'* && ${value} != */.. &&
+       ${value} != *'/./'* && ${value} != */. && ${value} != *//* ]] ||
+        die "REMMINA_KRUNNER_OS_RELEASE_FILE must be a bounded normalized absolute path" 64
+    [[ -f ${value} && ! -L ${value} && -r ${value} ]] ||
+        die "The OS release record must be a readable regular non-symlink file" 65
+}
+resolve_os_release_file() {
+    if [[ -n ${REMMINA_KRUNNER_OS_RELEASE_FILE:-} ]]; then
+        validate_os_release_override "${REMMINA_KRUNNER_OS_RELEASE_FILE}"
+        printf '%s\n' "${REMMINA_KRUNNER_OS_RELEASE_FILE}"
+        return
+    fi
+
+    local system_record=/etc/os-release target resolved
+    if [[ -L ${system_record} ]]; then
+        target=$(readlink -- "${system_record}") ||
+            die "Unable to read the system OS release link" 65
+        [[ ${target} == ../usr/lib/os-release ]] ||
+            die "The system OS release link is not canonical" 65
+        resolved=$(readlink -f -- "${system_record}") ||
+            die "Unable to resolve the system OS release record" 65
+        [[ ${resolved} == /usr/lib/os-release && -f ${resolved} &&
+           ! -L ${resolved} && -r ${resolved} ]] ||
+            die "The canonical OS release target must be a readable regular non-symlink file" 65
+        printf '%s\n' "${resolved}"
+        return
+    fi
+
+    [[ -f ${system_record} && -r ${system_record} ]] ||
+        die "The OS release record must be a readable regular non-symlink file" 65
+    printf '%s\n' "${system_record}"
+}
+require_supported_platform() {
+    [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] ||
+        die "This release bundle supports Fedora Linux 44 x86_64 only" 65
+
+    local os_release_file
+    os_release_file=$(resolve_os_release_file)
+    local line key value platform_id= platform_version=
+    declare -A seen_keys=()
+    while IFS= read -r line || [[ -n ${line} ]]; do
+        [[ ${line} != *$'\r'* ]] || die "The OS release record is malformed" 65
+        [[ ${line} =~ ^[[:space:]]*$ || ${line} =~ ^[[:space:]]*# ]] && continue
+        [[ ${line} =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]] ||
+            die "The OS release record is malformed" 65
+        key=${BASH_REMATCH[1]}
+        value=${BASH_REMATCH[2]}
+        [[ ${seen_keys["${key}"]+present} != present ]] ||
+            die "The OS release record contains a duplicate key" 65
+        seen_keys["${key}"]=1
+        case ${key} in
+            ID)
+                case ${value} in
+                    fedora|'"fedora"') platform_id=fedora ;;
+                    *) die "This release bundle supports Fedora Linux 44 x86_64 only" 65 ;;
+                esac
+                ;;
+            VERSION_ID)
+                case ${value} in
+                    44|'"44"') platform_version=44 ;;
+                    *) die "This release bundle supports Fedora Linux 44 x86_64 only" 65 ;;
+                esac
+                ;;
+        esac
+    done <"${os_release_file}"
+    [[ ${platform_id} == fedora && ${platform_version} == 44 ]] ||
+        die "This release bundle supports Fedora Linux 44 x86_64 only" 65
+}
 require_commands() {
     local command_name
     for command_name in find flock grep id install ldd mkdir mktemp mv readlink rm rmdir sleep sort stat uname kbuildsycoca6; do
@@ -35,8 +107,7 @@ fi
 validate_path XDG_DATA_HOME "${data_home}"
 
 require_commands
-[[ $(uname -s) == Linux ]] || die "This release bundle supports Linux only" 65
-case $(uname -m) in x86_64|aarch64) ;; *) die "Unsupported Linux architecture" 65 ;; esac
+require_supported_platform
 
 script_path=$(readlink -f -- "${BASH_SOURCE[0]}") || die "Unable to resolve installer path" 66
 package_root=${script_path%/*}
@@ -100,7 +171,7 @@ done
 for runtime_file in "${payload_binary}" "${payload_plugin}"; do
     if ! ldd_output=$(LC_ALL=C ldd -- "${runtime_file}" 2>&1) || [[ ${ldd_output} == *'not found'* ]]; then
         printf '%s\n' "${ldd_output}" >&2
-        die "Install the missing runtime libraries for your Linux distribution, then retry." 67
+        die "Install the missing Fedora Linux 44 runtime libraries, then retry." 67
     fi
 done
 

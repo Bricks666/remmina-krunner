@@ -58,6 +58,16 @@ foreach(NEEDLE IN ITEMS
 endforeach()
 assert_contains("${README_TEXT}" "README.md" "`rem` returns no results")
 assert_contains("${README_TEXT}" "README.md" "case-insensitive")
+foreach(NEEDLE IN ITEMS
+    "Fedora Linux 44 x86_64"
+    "Qt 6.7 is the compile-time API floor"
+    "Other distributions"
+    "distro-native container"
+    "source bundle is not portable"
+    "canonical `/etc/os-release` symlink"
+)
+    assert_contains("${README_TEXT}" "README.md binary runtime support" "${NEEDLE}")
+endforeach()
 
 string(FIND "${README_TEXT}" "## Safe manual Plasma validation" MANUAL_START)
 string(FIND "${README_TEXT}" "## Development" MANUAL_END)
@@ -101,6 +111,8 @@ foreach(NEEDLE IN ITEMS
     "no project-declared credential or engine-socket mounts"
     "inspect and disable"
     "provider-added credential forwarding"
+    "Fedora Linux 44 x86_64"
+    "distro-native build"
 )
     assert_contains("${CONTRIBUTING_TEXT}" "CONTRIBUTING.md" "${NEEDLE}")
 endforeach()

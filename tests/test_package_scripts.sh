@@ -132,8 +132,10 @@ make_bundle() {
 }
 run_install() {
     local bundle=$1 home=$2 data=${3:-} prefix=${4:-}
+    local os_release_file=${5-${REMMINA_KRUNNER_OS_RELEASE_FILE:-${supported_os_release_file:-/etc/os-release}}}
     HOME=${home} XDG_CONFIG_HOME="${home}/.config" XDG_DATA_HOME=${data} \
         REMMINA_KRUNNER_INSTALL_PREFIX=${prefix} FAKE_CALL_LOG=${calls} \
+        REMMINA_KRUNNER_OS_RELEASE_FILE=${os_release_file} \
         PACKAGE_HELPER_LOG=${helper_log} \
         PACKAGE_HELPER_BLOCK_READY=${PACKAGE_HELPER_BLOCK_READY:-} \
         PACKAGE_HELPER_BLOCK_RELEASE=${PACKAGE_HELPER_BLOCK_RELEASE:-} \
@@ -143,6 +145,7 @@ run_install() {
         FAKE_MV_SIGNAL_AFTER_REPLACEMENT=${FAKE_MV_SIGNAL_AFTER_REPLACEMENT:-0} \
         FAKE_MKDIR_RACE_PATH=${FAKE_MKDIR_RACE_PATH:-} \
         FAKE_MKDIR_RACE_MARKER=${FAKE_MKDIR_RACE_MARKER:-} \
+        FAKE_UNAME_S=${FAKE_UNAME_S:-Linux} FAKE_UNAME_M=${FAKE_UNAME_M:-x86_64} \
         PATH="${fake_bin}:/usr/bin:/bin" /usr/bin/bash "${bundle}/install.sh"
 }
 run_uninstall() {
@@ -187,6 +190,56 @@ missing_rmdir_after=$(snapshot "${missing_rmdir_home}")
     fail "missing rmdir dependency mutated destinations"
 grep -Fq 'Required command is unavailable: rmdir' "${root}/missing-rmdir.err" ||
     fail "missing rmdir dependency was not rejected by preflight"
+
+# The Fedora-built binary bundle is accepted only on Fedora 44 x86_64. The
+# os-release override is test-only and each rejection must precede mutation.
+platform_files=${root}/platform-files
+mkdir -p -- "${platform_files}"
+printf 'ID=fedora\nVERSION_ID=44\nNAME=Fedora Linux\n' >"${platform_files}/fedora-44"
+printf 'VERSION_ID="44"\nID="fedora"\nNAME="Fedora Linux"\n' >"${platform_files}/fedora-44-quoted"
+printf 'ID=ubuntu\nVERSION_ID="24.04"\n' >"${platform_files}/ubuntu"
+printf 'ID=debian\nVERSION_ID=13\n' >"${platform_files}/debian"
+printf 'ID=fedora\nVERSION_ID=45\n' >"${platform_files}/fedora-45"
+printf 'ID =fedora\nVERSION_ID=44\n' >"${platform_files}/malformed"
+printf 'ID=fedora\nID="fedora"\nVERSION_ID=44\n' >"${platform_files}/duplicate"
+ln -s -- "${platform_files}/fedora-44" "${platform_files}/symlink"
+mkdir -- "${platform_files}/directory"
+supported_os_release_file=${platform_files}/fedora-44
+
+for platform_name in fedora-44 fedora-44-quoted; do
+    platform_pass_root=${root}/platform-pass-${platform_name}
+    mkdir -p -- "${platform_pass_root}/home"
+    REMMINA_KRUNNER_OS_RELEASE_FILE=${platform_files}/${platform_name} \
+        run_install "${bundle}" "${platform_pass_root}/home"
+    [[ -f ${platform_pass_root}/home/.local/bin/remmina-krunner ]] ||
+        fail "${platform_name}: supported platform was not installed"
+done
+platform_default_root=${root}/platform-pass-system-default
+mkdir -p -- "${platform_default_root}/home"
+run_install "${bundle}" "${platform_default_root}/home" '' '' ''
+[[ -f ${platform_default_root}/home/.local/bin/remmina-krunner ]] ||
+    fail "canonical Fedora system os-release was not installed"
+
+for platform_name in ubuntu debian fedora-45 malformed duplicate symlink directory missing; do
+    platform_failure_root=${root}/platform-failure-${platform_name}
+    mkdir -p -- "${platform_failure_root}/home" "${platform_failure_root}/runtime"
+    XDG_RUNTIME_DIR=${platform_failure_root}/runtime \
+        REMMINA_KRUNNER_OS_RELEASE_FILE=${platform_files}/${platform_name} \
+        assert_failure_without_mutation "platform-${platform_name}" \
+        "${platform_failure_root}" run_install "${bundle}" "${platform_failure_root}/home"
+done
+relative_platform_root=${root}/platform-failure-relative
+mkdir -p -- "${relative_platform_root}/home" "${relative_platform_root}/runtime"
+XDG_RUNTIME_DIR=${relative_platform_root}/runtime REMMINA_KRUNNER_OS_RELEASE_FILE=relative \
+    assert_failure_without_mutation platform-relative "${relative_platform_root}" \
+    run_install "${bundle}" "${relative_platform_root}/home"
+aarch64_root=${root}/platform-failure-aarch64
+mkdir -p -- "${aarch64_root}/home" "${aarch64_root}/runtime"
+XDG_RUNTIME_DIR=${aarch64_root}/runtime FAKE_UNAME_M=aarch64 \
+    REMMINA_KRUNNER_OS_RELEASE_FILE=${platform_files}/fedora-44 \
+    assert_failure_without_mutation platform-aarch64 "${aarch64_root}" \
+    run_install "${bundle}" "${aarch64_root}/home"
+: >"${helper_log}"
 
 run_install "${bundle}" "${home}"
 binary=${home}/.local/bin/remmina-krunner
@@ -430,7 +483,8 @@ printf 'keep\n' >"${home}/.local/bin/unrelated"
 "${binary}" hold &
 runner_pid=$!
 wait_for_identity "${runner_pid}" "${binary}"
-run_uninstall "${bundle}" "${home}"
+FAKE_UNAME_M=aarch64 REMMINA_KRUNNER_OS_RELEASE_FILE=${platform_files}/fedora-45 \
+    run_uninstall "${bundle}" "${home}"
 for _ in {1..100}; do kill -0 "${runner_pid}" 2>/dev/null || break; sleep 0.01; done
 ! kill -0 "${runner_pid}" 2>/dev/null || fail "uninstall did not stop exact runner"
 wait "${runner_pid}" 2>/dev/null || true

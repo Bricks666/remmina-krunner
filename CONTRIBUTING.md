@@ -40,6 +40,17 @@ mkdir -m 0755 build-release-assets
 ./scripts/container.sh release-package "${release_tag}" "${PWD}/build-release-assets"
 ```
 
+The v0.1.0 binary runtime target is Fedora Linux 44 x86_64. Both the published
+archive and `source-bundle` output use the pinned Fedora container's dynamic
+Qt/KDE ABI and `lib64` plugin layout. A distro-native build, package, and layout
+is required for every other distribution; none is provided by the current
+release workflow. aarch64 is outside the current binary release contract.
+
+Package tests may set `REMMINA_KRUNNER_OS_RELEASE_FILE` to a bounded absolute
+regular fixture in order to exercise synthetic platform records. This is a
+test-only input, not an end-user compatibility override, and the installer
+rejects symlinks, malformed records, duplicate keys, and unsupported targets.
+
 The wrapper performs a Release build with `BUILD_TESTING=OFF`, creates the
 archive and checksum in the checked-in container, and verifies the exact
 nine-file bundle. Verify and review both assets before tagging. A release tag
