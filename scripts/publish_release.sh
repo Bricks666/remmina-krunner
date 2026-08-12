@@ -12,7 +12,7 @@ repository=$1
 release_tag=$2
 asset_directory=$3
 expected_commit=$4
-publication_nonce=${5:-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}}
+publication_nonce=${5:-${GITHUB_RUN_ID:-manual}}
 temporary_root=
 release_id=
 archive_pending_id=
@@ -21,6 +21,8 @@ archive_pending_name=
 checksum_pending_name=
 prior_archive_id=
 prior_checksum_id=
+recovery_archive_id=
+recovery_checksum_id=
 
 die()
 {
@@ -406,10 +408,10 @@ ensure_publication_identity ||
     die "Release identity, draft state, or tag target changed" 73
 
 existing_assets=$(list_assets) || die "Unable to list existing draft assets" 69
-existing_count=0
+archive_pending_name=${archive_name}.pending-${publication_nonce}
+checksum_pending_name=${checksum_name}.pending-${publication_nonce}
 while IFS=$'\t' read -r asset_id asset_name; do
     [[ -n ${asset_id} ]] || continue
-    ((existing_count += 1))
     [[ ${asset_id} =~ ^[0-9]+$ ]] || die "Release asset ID is invalid" 65
     case ${asset_name} in
         "${archive_name}")
@@ -420,16 +422,59 @@ while IFS=$'\t' read -r asset_id asset_name; do
             [[ -z ${prior_checksum_id} ]] || die "Draft contains duplicate checksum assets" 65
             prior_checksum_id=${asset_id}
             ;;
+        "${archive_pending_name}")
+            [[ -z ${recovery_archive_id} ]] || die "Draft contains duplicate pending archive assets" 65
+            recovery_archive_id=${asset_id}
+            ;;
+        "${checksum_pending_name}")
+            [[ -z ${recovery_checksum_id} ]] || die "Draft contains duplicate pending checksum assets" 65
+            recovery_checksum_id=${asset_id}
+            ;;
         *)
             die "Refusing to mutate a draft containing foreign asset: ${asset_name}" 65
             ;;
     esac
 done <<<"${existing_assets}"
-[[ ${existing_count} -eq 2 && -n ${prior_archive_id} && -n ${prior_checksum_id} ]] ||
-    die "Existing draft must contain exactly the canonical archive and checksum" 65
 
-archive_pending_name=${archive_name}.pending-${publication_nonce}
-checksum_pending_name=${checksum_name}.pending-${publication_nonce}
+# An upload API failure can write the asset while withholding its response ID.
+# Verify every recoverable pending asset before mutating any of them.
+for recovery_record in \
+    "${recovery_archive_id}|${archive_pending_name}|${archive_path}|archive" \
+    "${recovery_checksum_id}|${checksum_pending_name}|${checksum_path}|checksum"; do
+    recovery_id=${recovery_record%%|*}
+    [[ -n ${recovery_id} ]] || continue
+    recovery_tail=${recovery_record#*|}
+    recovery_name=${recovery_tail%%|*}
+    recovery_tail=${recovery_tail#*|}
+    recovery_path=${recovery_tail%%|*}
+    recovery_description=${recovery_tail#*|}
+    ensure_publication_identity ||
+        die "Release identity changed before pending asset verification" 73
+    verify_asset_bytes "${recovery_id}" "${recovery_path}" \
+        "recoverable pending ${recovery_description}"
+    ensure_publication_identity ||
+        die "Release identity changed during pending asset verification" 73
+done
+
+for recovery_record in \
+    "${recovery_archive_id}|${archive_pending_name}" \
+    "${recovery_checksum_id}|${checksum_pending_name}"; do
+    recovery_id=${recovery_record%%|*}
+    [[ -n ${recovery_id} ]] || continue
+    recovery_name=${recovery_record#*|}
+    ensure_publication_identity ||
+        die "Release identity changed before pending asset cleanup" 73
+    recovery_lookup=0
+    lookup_asset_id_by_name "${recovery_name}" || recovery_lookup=$?
+    [[ ${recovery_lookup} -eq 0 && ${lookup_asset_id} == "${recovery_id}" ]] ||
+        die "Pending asset identity or uniqueness changed before cleanup" 73
+    gh api --method DELETE \
+        "repos/${repository}/releases/assets/${recovery_id}" >/dev/null ||
+        die "Unable to remove verified interrupted upload" 69
+    ensure_publication_identity ||
+        die "Release identity changed after pending asset cleanup" 73
+done
+
 require_asset_name_absent "${archive_pending_name}"
 require_asset_name_absent "${checksum_pending_name}"
 
@@ -454,6 +499,7 @@ verify_asset_bytes "${checksum_pending_id}" "${checksum_path}" "staged checksum"
 for asset_record in "${prior_archive_id}|${archive_name}" "${prior_checksum_id}|${checksum_name}"; do
     asset_id=${asset_record%%|*}
     asset_name=${asset_record#*|}
+    [[ -n ${asset_id} ]] || continue
     ensure_publication_identity ||
         die "Release identity changed before deleting asset ${asset_id}" 73
     lookup_asset_name_by_id "${asset_id}" ||

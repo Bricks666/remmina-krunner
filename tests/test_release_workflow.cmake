@@ -81,6 +81,7 @@ foreach(NEEDLE IN ITEMS
     [=[GH_TOKEN: ${{ github.token }}]=]
     [=[EXPECTED_COMMIT: ${{ needs.build.outputs.expected_commit }}]=]
     "./scripts/publish_release.sh"
+    [=[            "${GITHUB_RUN_ID}"]=]
 )
     assert_contains("release workflow" "${NEEDLE}")
 endforeach()
@@ -89,6 +90,7 @@ assert_count("artifact upload" "uses: actions/upload-artifact@" 1)
 assert_count("artifact download" "uses: actions/download-artifact@" 1)
 assert_count("token exposure" "GH_TOKEN:" 1)
 assert_count("job runners" "\n    runs-on:" 2)
+assert_not_contains("publication nonce" [=["${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"]=])
 file(STRINGS "${WORKFLOW_FILE}" ACTION_LINES REGEX "^[ \t]*uses:")
 foreach(ACTION IN LISTS ACTION_LINES)
     string(REGEX REPLACE "[ \t]+#.*$" "" ACTION "${ACTION}")

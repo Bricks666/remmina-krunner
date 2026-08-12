@@ -206,6 +206,14 @@ fake_gh()
                     else
                         cat -- "${GH_STATE_DIR}/assets/${asset_id}"
                     fi
+                    if [[ $(<"${GH_STATE_DIR}/names/${asset_id}") == *.pending-* ]]; then
+                        if [[ -f ${GH_STATE_DIR}/publish-after-pending-download ]]; then
+                            : >"${GH_STATE_DIR}/publish-on-next-check"
+                        fi
+                        if [[ -f ${GH_STATE_DIR}/move-tag-after-pending-download ]]; then
+                            : >"${GH_STATE_DIR}/move-tag-on-release-check"
+                        fi
+                    fi
                     ;;
                 DELETE)
                     [[ $(<"${GH_STATE_DIR}/release-state") == draft ]] || return 1
@@ -473,6 +481,19 @@ run_publisher()
         "${expected_commit}" test-run
 }
 
+run_publisher_default()
+{
+    local attempt=$1
+    PUBLISH_RELEASE_FAKE_GH=1 \
+    EXPECTED_REPO=${repository} \
+    GH_TOKEN=mock-token \
+    GITHUB_RUN_ID=stable-run \
+    GITHUB_RUN_ATTEMPT=${attempt} \
+    PATH="${fake_bin}:${PATH}" \
+        "${publisher}" "${repository}" "${tag}" "${ASSET_DIRECTORY}" \
+        "${expected_commit}"
+}
+
 expect_failure()
 {
     if run_publisher; then
@@ -617,8 +638,7 @@ if grep -Eq '^release (upload|create)|--method (DELETE|PATCH)' "${GH_STATE_DIR}/
     exit 1
 fi
 
-# A failed ID-addressed upload has no trusted response ID. The old pair remains,
-# and the ambiguous starter asset is deliberately not discovered and deleted.
+# A failed ID-addressed upload is recovered on a rerun with the same nonce.
 for failed_upload in 1 2; do
     new_state upload-failure-${failed_upload} draft
     new_assets upload-failure-${failed_upload}
@@ -641,6 +661,61 @@ for failed_upload in 1 2; do
             exit 1
         }
     fi
+    run_publisher
+    assert_exact_remote_pair
+    assert_remote_matches_local
+    assert_no_pending_assets
+done
+
+# The default nonce stays stable when GitHub reruns the same run at a new attempt.
+new_state stable-default-nonce draft
+new_assets stable-default-nonce
+add_old_pair
+printf '%s\n' 1 >"${GH_STATE_DIR}/fail-upload-after-write"
+if run_publisher_default 1; then
+    echo "First publication attempt must expose the interrupted upload" >&2
+    exit 1
+fi
+asset_id_for_name "${archive}.pending-stable-run" >/dev/null
+run_publisher_default 2
+assert_exact_remote_pair
+assert_remote_matches_local
+
+# Empty and single-canonical-asset drafts are repairable subsets.
+for partial in empty archive checksum; do
+    new_state partial-${partial} draft
+    new_assets partial-${partial}
+    case ${partial} in
+        archive)
+            state_add_asset "${archive}" "${ASSET_DIRECTORY}/${archive}" >/dev/null
+            ;;
+        checksum)
+            state_add_asset "${checksum}" "${ASSET_DIRECTORY}/${checksum}" >/dev/null
+            ;;
+    esac
+    run_publisher
+    assert_exact_remote_pair
+    assert_remote_matches_local
+done
+
+# Matching current-nonce pending bytes may be cleaned only while identity holds.
+for recovery_race in publish tag; do
+    new_state recovery-race-${recovery_race} draft
+    new_assets recovery-race-${recovery_race}
+    add_old_pair
+    pending_id=$(state_add_asset "${pending_archive}" "${ASSET_DIRECTORY}/${archive}")
+    if [[ ${recovery_race} == publish ]]; then
+        : >"${GH_STATE_DIR}/publish-after-pending-download"
+    else
+        : >"${GH_STATE_DIR}/move-tag-after-pending-download"
+    fi
+    expect_failure
+    grep -qx "${pending_archive}" "${GH_STATE_DIR}/names/${pending_id}"
+    if [[ ${recovery_race} == publish ]]; then
+        [[ $(<"${GH_STATE_DIR}/release-state") == published ]]
+    else
+        [[ $(<"${GH_STATE_DIR}/tag-commit") == "${moved_commit}" ]]
+    fi
 done
 
 # Asset-list failures are distinct from a missing pending name and fail closed.
@@ -655,7 +730,7 @@ if grep -q 'uploads.github.com' "${GH_STATE_DIR}/calls"; then
     exit 1
 fi
 
-# Found and ambiguous pending names are both distinct from absence.
+# Mismatched and duplicate same-nonce pending names are preserved and refused.
 for collision_count in 1 2; do
     new_state collision-${collision_count} draft
     new_assets collision-${collision_count}
@@ -666,11 +741,29 @@ for collision_count in 1 2; do
     done
     expect_failure
     assert_old_pair_content_preserved
+    asset_id_for_name "${pending_archive}" >/dev/null
     if grep -q 'uploads.github.com' "${GH_STATE_DIR}/calls"; then
         echo "Pending-name collision reached the upload endpoint" >&2
         exit 1
     fi
 done
+
+# Pending assets from a different run nonce are foreign and preserved.
+new_state other-nonce draft
+new_assets other-nonce
+add_old_pair
+other_pending_id=$(state_add_asset "${archive}.pending-other-run" "${ASSET_DIRECTORY}/${archive}")
+expect_failure
+assert_old_pair_content_preserved
+grep -qx "${archive}.pending-other-run" "${GH_STATE_DIR}/names/${other_pending_id}"
+
+# Duplicate canonical names are ambiguous and preserved.
+new_state duplicate-canonical draft
+new_assets duplicate-canonical
+add_old_pair
+duplicate_id=$(state_add_asset "${archive}" "${ASSET_DIRECTORY}/${archive}")
+expect_failure
+grep -qx "${archive}" "${GH_STATE_DIR}/names/${duplicate_id}"
 
 # A draft becoming published before mutation is refused without changing assets.
 new_state publish-race draft

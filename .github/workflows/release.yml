@@ -129,4 +129,4 @@ jobs:
             "${GITHUB_REF_NAME}" \
             "${DOWNLOAD_DIRECTORY}" \
             "${EXPECTED_COMMIT}" \
-            "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            "${GITHUB_RUN_ID}"
