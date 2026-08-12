@@ -43,7 +43,7 @@ bool validArguments(const QStringList &arguments)
 } // namespace
 
 RemminaLauncher::RemminaLauncher(InstanceRegistrySource &registry,
-                                 ProfileCatalogSource &catalog,
+                                 ProfileCatalogReadSource &catalog,
                                  ProcessLauncher &processLauncher,
                                  Notifier &notifier)
     : RemminaLauncher(registry,
@@ -55,7 +55,7 @@ RemminaLauncher::RemminaLauncher(InstanceRegistrySource &registry,
 }
 
 RemminaLauncher::RemminaLauncher(InstanceRegistrySource &registry,
-                                 ProfileCatalogSource &catalog,
+                                 ProfileCatalogReadSource &catalog,
                                  ProcessLauncher &processLauncher,
                                  Notifier &notifier,
                                  EnvironmentProvider environmentProvider)
@@ -91,8 +91,9 @@ RemminaLaunchResult RemminaLauncher::connect(QStringView opaqueId,
             return failure(RemminaLaunchResult::NoInstance);
         }
 
-        const ProfileRecord *record = catalog_.resolve(opaqueId);
-        if (record == nullptr) {
+        const std::optional<ProfileRecord> record =
+            catalog_.resolve(QStringView(instance.id), opaqueId);
+        if (!record.has_value()) {
             return failure(RemminaLaunchResult::MissingProfile);
         }
         const QString launchPath = record->launchPath;
@@ -142,6 +143,9 @@ RemminaLaunchResult RemminaLauncher::launch(const RemminaInstance &instance,
         return failure(RemminaLaunchResult::StartFailed);
     }
     QProcessEnvironment environment = environmentProvider_();
+    if (environment.inheritsFromParent()) {
+        environment = QProcessEnvironment::systemEnvironment();
+    }
     environment.remove(QString{activationTokenName});
     if (!activationToken.isEmpty()) {
         environment.insert(QString{activationTokenName}, activationToken.toString());

@@ -12,7 +12,7 @@
 class InstanceRegistrySource;
 class Notifier;
 class ProcessLauncher;
-class ProfileCatalogSource;
+class ProfileCatalogReadSource;
 struct RemminaInstance;
 
 enum class RemminaLaunchResult {
@@ -29,11 +29,11 @@ public:
     // The launcher is single-thread confined. All four object dependencies are
     // non-owning, are used on that same thread, and must outlive the launcher.
     RemminaLauncher(InstanceRegistrySource &registry,
-                    ProfileCatalogSource &catalog,
+                    ProfileCatalogReadSource &catalog,
                     ProcessLauncher &processLauncher,
                     Notifier &notifier);
     RemminaLauncher(InstanceRegistrySource &registry,
-                    ProfileCatalogSource &catalog,
+                    ProfileCatalogReadSource &catalog,
                     ProcessLauncher &processLauncher,
                     Notifier &notifier,
                     EnvironmentProvider environmentProvider);
@@ -50,7 +50,7 @@ private:
     [[nodiscard]] RemminaLaunchResult failure(RemminaLaunchResult result) noexcept;
 
     InstanceRegistrySource &registry_;
-    ProfileCatalogSource &catalog_;
+    ProfileCatalogReadSource &catalog_;
     ProcessLauncher &processLauncher_;
     Notifier &notifier_;
     EnvironmentProvider environmentProvider_;

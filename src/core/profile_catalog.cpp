@@ -235,29 +235,33 @@ CatalogResult ProfileCatalog::records(const RemminaInstance &instance)
     return records_;
 }
 
-const ProfileRecord *ProfileCatalog::resolve(QStringView opaqueId) const
+std::optional<ProfileRecord> ProfileCatalog::resolve(
+    QStringView expectedInstanceId, QStringView opaqueId) const
 {
-    if (dirty_ || !hasCleanSnapshot_
+    if (!hasSelectedInstance_ || selectedInstanceId_ != expectedInstanceId || dirty_
+        || !hasCleanSnapshot_
         || !profile_repository_detail::directoryMatches(
             cleanDirectory_.hostPath, cleanDirectoryFingerprint_)) {
-        return nullptr;
+        return std::nullopt;
     }
     for (const ProfileRecord &record : records_) {
         if (record.opaqueId == opaqueId) {
             const QFileInfo currentSource(record.sourcePath);
             if (!currentSource.exists() || !currentSource.isFile()) {
-                return nullptr;
+                return std::nullopt;
             }
             const QString canonicalIdentity = currentSource.canonicalFilePath();
             if (canonicalIdentity.isEmpty()) {
-                return nullptr;
+                return std::nullopt;
             }
             const QString currentId = profile_repository_detail::opaqueProfileId(
                 QStringView(selectedInstanceId_), QStringView(canonicalIdentity));
-            return currentId == record.opaqueId ? &record : nullptr;
+            return currentId == record.opaqueId
+                ? std::optional<ProfileRecord>{record}
+                : std::nullopt;
         }
     }
-    return nullptr;
+    return std::nullopt;
 }
 
 void ProfileCatalog::markDirty() noexcept

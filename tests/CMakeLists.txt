@@ -80,7 +80,9 @@ add_dependencies(test_qt_process_probe process_probe_helper)
 add_test(NAME qt_process_probe COMMAND test_qt_process_probe)
 
 add_executable(test_remmina_launcher test_remmina_launcher.cpp)
-target_link_libraries(test_remmina_launcher PRIVATE remmina_krunner_core Qt6::Test)
+target_link_libraries(test_remmina_launcher
+    PRIVATE remmina_krunner_core Qt6::DBus Qt6::Test
+)
 
 add_test(NAME remmina_launcher COMMAND test_remmina_launcher)
 

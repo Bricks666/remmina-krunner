@@ -7,9 +7,12 @@
 
 #include "core/instance_registry.h"
 #include "core/profile_catalog.h"
+#include "platform/freedesktop_notifier.h"
 #include "platform/notifier.h"
 #include "platform/process_launcher.h"
 
+#include <QByteArray>
+#include <QDBusMessage>
 #include <QList>
 #include <QProcessEnvironment>
 #include <QStringList>
@@ -18,6 +21,31 @@
 #include <utility>
 
 namespace {
+
+class ScopedEnvironmentVariable {
+public:
+    ScopedEnvironmentVariable(QByteArray name, QByteArray value)
+        : name_(std::move(name))
+        , wasSet_(qEnvironmentVariableIsSet(name_.constData()))
+        , previousValue_(qgetenv(name_.constData()))
+    {
+        qputenv(name_.constData(), value);
+    }
+
+    ~ScopedEnvironmentVariable()
+    {
+        if (wasSet_) {
+            qputenv(name_.constData(), previousValue_);
+        } else {
+            qunsetenv(name_.constData());
+        }
+    }
+
+private:
+    QByteArray name_;
+    bool wasSet_;
+    QByteArray previousValue_;
+};
 
 RemminaInstance makeInstance(QString id = QStringLiteral("native:/usr/bin/remmina"),
                              QString executable = QStringLiteral("/usr/bin/remmina"),
@@ -70,22 +98,28 @@ public:
     bool throws = false;
 };
 
-class FakeCatalog final : public ProfileCatalogSource {
+class FakeCatalog final : public ProfileCatalogReadSource {
 public:
-    [[nodiscard]] const ProfileRecord *resolve(QStringView opaqueId) const override
+    [[nodiscard]] std::optional<ProfileRecord> resolve(
+        QStringView expectedInstanceId, QStringView opaqueId) const override
     {
         ++calls;
+        expectedInstanceIds.append(expectedInstanceId.toString());
         resolvedIds.append(opaqueId.toString());
         if (throws) {
             throw std::runtime_error("catalog secret exception");
         }
-        return hasRecord ? &record : nullptr;
+        return hasRecord && expectedInstanceId == recordInstanceId
+            ? std::optional<ProfileRecord>{record}
+            : std::nullopt;
     }
 
     ProfileRecord record = makeRecord();
+    QString recordInstanceId = QStringLiteral("native:/usr/bin/remmina");
     bool hasRecord = true;
     bool throws = false;
     mutable int calls = 0;
+    mutable QStringList expectedInstanceIds;
     mutable QStringList resolvedIds;
 };
 
@@ -151,11 +185,14 @@ private slots:
     void createsWithPrefixWithoutConsultingCatalog();
     void preservesHostileValuesAsInertArguments();
     void scopesActivationTokenToEachEnvironmentSnapshot();
+    void normalizesInheritedEnvironmentBeforeRemovingStaleToken();
     void rejectsUnavailableOrAmbiguousSelection();
     void rejectsMissingProfilesAfterValidSelection();
+    void rejectsProfileFromDifferentSelectedInstance();
     void rejectsInvalidCommandsAndToken();
     void reportsProcessStartFailureOnce();
     void usesOnlyGenericNotificationConstants();
+    void buildsExactGenericFreedesktopNotificationMessage();
     void containsDependencyAndNotifierExceptions();
     void consultsCatalogOnlyForConnectAfterValidCurrentInstance();
 };
@@ -196,6 +233,7 @@ void RemminaLauncherTest::buildsExactNativeFlatpakAndSnapConnectCommands()
         harness.registry.value.selectedId = testCase.id;
         harness.catalog.record = makeRecord(
             QStringLiteral("opaque-safe-id"), QStringLiteral("/launch/profile one.remmina"));
+        harness.catalog.recordInstanceId = testCase.id;
 
         QCOMPARE(harness.launcher.connect(QStringLiteral("opaque-safe-id")),
                  RemminaLaunchResult::Started);
@@ -205,6 +243,7 @@ void RemminaLauncherTest::buildsExactNativeFlatpakAndSnapConnectCommands()
         expectedArguments.append(QStringLiteral("--connect"));
         expectedArguments.append(QStringLiteral("/launch/profile one.remmina"));
         QCOMPARE(harness.process.requests.constFirst().arguments, expectedArguments);
+        QCOMPARE(harness.catalog.expectedInstanceIds, QStringList{testCase.id});
         QCOMPARE(harness.notifier.calls, 0);
     }
 }
@@ -250,6 +289,7 @@ void RemminaLauncherTest::preservesHostileValuesAsInertArguments()
         makeInstance(QStringLiteral("hostile-id"), hostileProgram, hostilePrefix)};
     harness.registry.value.selectedId = QStringLiteral("hostile-id");
     harness.catalog.record = makeRecord(QStringLiteral("opaque"), hostilePath);
+    harness.catalog.recordInstanceId = QStringLiteral("hostile-id");
 
     QCOMPARE(harness.launcher.connect(QStringLiteral("opaque")),
              RemminaLaunchResult::Started);
@@ -289,6 +329,38 @@ void RemminaLauncherTest::scopesActivationTokenToEachEnvironmentSnapshot()
     QCOMPARE(harness.notifier.calls, 0);
 }
 
+void RemminaLauncherTest::normalizesInheritedEnvironmentBeforeRemovingStaleToken()
+{
+    const ScopedEnvironmentVariable inheritedToken(
+        QByteArrayLiteral("XDG_ACTIVATION_TOKEN"), QByteArrayLiteral("ambient stale token"));
+    const ScopedEnvironmentVariable inheritedMarker(
+        QByteArrayLiteral("INHERITED_ENVIRONMENT_MARKER"), QByteArrayLiteral("preserved"));
+    FakeRegistry registry;
+    registry.value.instances = {makeInstance()};
+    registry.value.selectedId = registry.value.instances.constFirst().id;
+    FakeCatalog catalog;
+    RecordingLauncher process;
+    RecordingNotifier notifier;
+    RemminaLauncher launcher(
+        registry,
+        catalog,
+        process,
+        notifier,
+        [] {
+            return QProcessEnvironment{
+                QProcessEnvironment::Initialization::InheritFromParent};
+        });
+
+    QCOMPARE(launcher.create(), RemminaLaunchResult::Started);
+    QCOMPARE(process.calls, 1);
+    const QProcessEnvironment &environment = process.requests.constFirst().environment;
+    QVERIFY(!environment.inheritsFromParent());
+    QVERIFY(!environment.contains(QStringLiteral("XDG_ACTIVATION_TOKEN")));
+    QCOMPARE(environment.value(QStringLiteral("INHERITED_ENVIRONMENT_MARKER")),
+             QStringLiteral("preserved"));
+    QCOMPARE(notifier.calls, 0);
+}
+
 void RemminaLauncherTest::rejectsUnavailableOrAmbiguousSelection()
 {
     const QList<RegistrySnapshot> invalidSnapshots{
@@ -324,10 +396,42 @@ void RemminaLauncherTest::rejectsMissingProfilesAfterValidSelection()
 
         QCOMPARE(harness.launcher.connect(id), RemminaLaunchResult::MissingProfile);
         QCOMPARE(harness.catalog.calls, 1);
+        QCOMPARE(harness.catalog.expectedInstanceIds,
+                 QStringList{QStringLiteral("native:/usr/bin/remmina")});
         QCOMPARE(harness.catalog.resolvedIds, QStringList{id});
         QCOMPARE(harness.process.calls, 0);
         QCOMPARE(harness.notifier.calls, 1);
     }
+}
+
+void RemminaLauncherTest::rejectsProfileFromDifferentSelectedInstance()
+{
+    Harness harness;
+    harness.registry.value.instances = {
+        makeInstance(QStringLiteral("native:instance-a"),
+                     QStringLiteral("/opt/instance-a/remmina"))};
+    harness.registry.value.selectedId = QStringLiteral("native:instance-a");
+    harness.catalog.record = makeRecord(QStringLiteral("same-opaque-text"),
+                                        QStringLiteral("/profiles/from-b.remmina"));
+    harness.catalog.recordInstanceId = QStringLiteral("native:instance-b");
+
+    QCOMPARE(harness.launcher.connect(QStringLiteral("same-opaque-text")),
+             RemminaLaunchResult::MissingProfile);
+    QCOMPARE(harness.catalog.calls, 1);
+    QCOMPARE(harness.catalog.expectedInstanceIds,
+             QStringList{QStringLiteral("native:instance-a")});
+    QCOMPARE(harness.process.calls, 0);
+    QCOMPARE(harness.notifier.calls, 1);
+
+    harness.catalog.recordInstanceId = QStringLiteral("native:instance-a");
+    QCOMPARE(harness.launcher.connect(QStringLiteral("same-opaque-text")),
+             RemminaLaunchResult::Started);
+    QCOMPARE(harness.catalog.calls, 2);
+    QCOMPARE(harness.catalog.expectedInstanceIds,
+             QStringList({QStringLiteral("native:instance-a"),
+                          QStringLiteral("native:instance-a")}));
+    QCOMPARE(harness.process.calls, 1);
+    QCOMPARE(harness.notifier.calls, 1);
 }
 
 void RemminaLauncherTest::rejectsInvalidCommandsAndToken()
@@ -367,6 +471,7 @@ void RemminaLauncherTest::rejectsInvalidCommandsAndToken()
             makeInstance(QStringLiteral("selected"), testCase.program, testCase.prefix)};
         harness.registry.value.selectedId = QStringLiteral("selected");
         harness.catalog.record = makeRecord(QStringLiteral("opaque"), testCase.path);
+        harness.catalog.recordInstanceId = QStringLiteral("selected");
 
         QCOMPARE(harness.launcher.connect(QStringLiteral("opaque"), testCase.token),
                  RemminaLaunchResult::StartFailed);
@@ -409,6 +514,46 @@ void RemminaLauncherTest::usesOnlyGenericNotificationConstants()
              RemminaLaunchResult::StartFailed);
     QCOMPARE(harness.notifier.calls, 1);
     // Notifier receives no arguments, so caller data cannot be forwarded to it.
+}
+
+void RemminaLauncherTest::buildsExactGenericFreedesktopNotificationMessage()
+{
+    const QDBusMessage message =
+        freedesktop_notifier_detail::launchFailureMessage();
+
+    QCOMPARE(message.type(), QDBusMessage::MethodCallMessage);
+    QCOMPARE(message.service(), QStringLiteral("org.freedesktop.Notifications"));
+    QCOMPARE(message.path(), QStringLiteral("/org/freedesktop/Notifications"));
+    QCOMPARE(message.interface(), QStringLiteral("org.freedesktop.Notifications"));
+    QCOMPARE(message.member(), QStringLiteral("Notify"));
+
+    const QList<QVariant> arguments = message.arguments();
+    QCOMPARE(arguments.size(), 8);
+    QCOMPARE(arguments.at(0).typeId(), QMetaType::QString);
+    QCOMPARE(arguments.at(0).toString(), QStringLiteral("Remmina KRunner"));
+    QCOMPARE(arguments.at(1).typeId(), QMetaType::UInt);
+    QCOMPARE(arguments.at(1).toUInt(), uint{0});
+    QCOMPARE(arguments.at(2).typeId(), QMetaType::QString);
+    QVERIFY(arguments.at(2).toString().isEmpty());
+    QCOMPARE(arguments.at(3).typeId(), QMetaType::QString);
+    QCOMPARE(arguments.at(3).toString(), QStringLiteral("Remmina KRunner"));
+    QCOMPARE(arguments.at(4).typeId(), QMetaType::QString);
+    QCOMPARE(arguments.at(4).toString(), QStringLiteral("Could not open Remmina."));
+    QCOMPARE(arguments.at(5).typeId(), QMetaType::QStringList);
+    QVERIFY(arguments.at(5).toStringList().isEmpty());
+    QCOMPARE(arguments.at(6).typeId(), QMetaType::QVariantMap);
+    QVERIFY(arguments.at(6).toMap().isEmpty());
+    QCOMPARE(arguments.at(7).typeId(), QMetaType::Int);
+    QCOMPARE(arguments.at(7).toInt(), -1);
+
+    const QString rendered = message.service() + message.path() + message.interface()
+        + message.member() + arguments.at(0).toString() + arguments.at(2).toString()
+        + arguments.at(3).toString() + arguments.at(4).toString();
+    for (const QString &secret : {QStringLiteral("synthetic-secret"),
+                                  QStringLiteral("/profiles/from-b.remmina"),
+                                  QStringLiteral("activation-secret")}) {
+        QVERIFY(!rendered.contains(secret));
+    }
 }
 
 void RemminaLauncherTest::containsDependencyAndNotifierExceptions()

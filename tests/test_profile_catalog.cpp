@@ -311,7 +311,7 @@ void ProfileCatalogTest::constructorIsLazyAndDestructorClearsWatcher()
         QCOMPARE(repository.calls.size(), 0);
         QCOMPARE(watcher.replacements.size(), 0);
         QCOMPARE(watcher.clearCount, 0);
-        QVERIFY(catalog.resolve(u"never-loaded") == nullptr);
+        QVERIFY(!catalog.resolve(u"native:never-loaded", u"never-loaded"));
     }
 
     QCOMPARE(repository.calls.size(), 0);
@@ -399,7 +399,7 @@ void ProfileCatalogTest::explicitDirtyDefersReloadUntilNextLookup()
     catalog.markDirty();
 
     QCOMPARE(repository.calls.size(), 2);
-    QVERIFY(catalog.resolve(u"one") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"one"));
     const QList<ProfileRecord> reloaded = requireRecords(catalog.records(instance));
     QCOMPARE(repository.calls.size(), 4);
     QCOMPARE(reloaded.constFirst().opaqueId, QStringLiteral("two"));
@@ -426,11 +426,11 @@ void ProfileCatalogTest::watcherCallbackDefersReloadAndReplacesCurrentIds()
     watcher.trigger();
 
     QCOMPARE(repository.calls.size(), 2);
-    QVERIFY(catalog.resolve(u"stale") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"stale"));
     const QList<ProfileRecord> reloaded = requireRecords(catalog.records(instance));
     QCOMPARE(repository.calls.size(), 4);
     QCOMPARE(reloaded.constFirst().opaqueId, QStringLiteral("fresh"));
-    QVERIFY(catalog.resolve(u"stale") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"stale"));
 }
 
 void ProfileCatalogTest::endSessionForcesRepositoryVerificationEvenWhenClean()
@@ -479,7 +479,7 @@ void ProfileCatalogTest::instanceSwitchClearsOldStateBeforeLoadingNewScope()
     repository.beforeLoad = [&](const RemminaInstance &instance) {
         if (instance.id == second.id && secondLoadCount++ == 0) {
             oldStateWasClearedBeforeSecondLoad = watcher.paths.isEmpty()
-                && catalog.resolve(u"old") == nullptr;
+                && !catalog.resolve(QStringView(second.id), u"old");
         }
     };
 
@@ -487,7 +487,7 @@ void ProfileCatalogTest::instanceSwitchClearsOldStateBeforeLoadingNewScope()
 
     QVERIFY(oldStateWasClearedBeforeSecondLoad);
     QCOMPARE(repository.calls, QStringList({first.id, first.id, second.id, second.id}));
-    QVERIFY(catalog.resolve(u"old") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(second.id), u"old"));
     QCOMPARE(watcher.paths.constFirst(), QStringLiteral("/profiles/two"));
 }
 
@@ -512,7 +512,7 @@ void ProfileCatalogTest::resetClearsStateAndRemainsLazy()
     catalog.reset();
 
     QCOMPARE(repository.calls.size(), 2);
-    QVERIFY(catalog.resolve(u"before") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"before"));
     QVERIFY(watcher.paths.isEmpty());
     requireRecords(catalog.records(instance));
     QCOMPARE(repository.calls.size(), 4);
@@ -549,7 +549,7 @@ void ProfileCatalogTest::repositoryErrorsClearStateMapExactlyAndRetry()
         const CatalogResult failed = catalog.records(instance);
 
         QCOMPARE(requireError(failed), catalogError);
-        QVERIFY(catalog.resolve(u"stale") == nullptr);
+        QVERIFY(!catalog.resolve(QStringView(instance.id), u"stale"));
         QVERIFY(watcher.paths.isEmpty());
         QCOMPARE(repository.calls.size(), 3);
         requireRecords(catalog.records(instance));
@@ -578,7 +578,7 @@ void ProfileCatalogTest::repositoryErrorDuringVerificationClearsStateAndRetries(
 
     QCOMPARE(requireError(failed), ProfileCatalogError::UnreadableDirectory);
     QVERIFY(watcher.paths.isEmpty());
-    QVERIFY(catalog.resolve(u"fresh") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"fresh"));
     QCOMPARE(repository.calls.size(), 2);
     const QList<ProfileRecord> records = requireRecords(catalog.records(instance));
     QCOMPARE(records.constFirst().opaqueId, QStringLiteral("recovered"));
@@ -616,7 +616,7 @@ void ProfileCatalogTest::watcherSetupFailureServesFreshRecordsAndRetriesUntilSaf
 
     const QList<ProfileRecord> first = requireRecords(catalog.records(instance));
     QCOMPARE(first.constFirst().opaqueId, QStringLiteral("first"));
-    QVERIFY(catalog.resolve(u"first") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"first"));
     QVERIFY(watcher.paths.isEmpty());
 
     const QList<ProfileRecord> second = requireRecords(catalog.records(instance));
@@ -725,7 +725,7 @@ void ProfileCatalogTest::repeatedHandoffMutationStaysDirtyAndRetries()
     QCOMPARE(repository.calls.size(), 3);
     QCOMPARE(watcher.replacements.size(), 2);
     QVERIFY(watcher.paths.isEmpty());
-    QVERIFY(catalog.resolve(u"c") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"c"));
 
     requireRecords(catalog.records(instance));
     QCOMPARE(repository.calls.size(), 5);
@@ -748,7 +748,7 @@ void ProfileCatalogTest::synchronousWatcherCallbacksCannotBeOverwrittenClean()
     QCOMPARE(repository.calls.size(), 2);
     QCOMPARE(watcher.replacements.size(), 1);
     QVERIFY(watcher.paths.isEmpty());
-    QVERIFY(catalog.resolve(u"record") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"record"));
     requireRecords(catalog.records(instance));
     QCOMPARE(repository.calls.size(), 4);
 }
@@ -811,12 +811,12 @@ void ProfileCatalogTest::removesEmptyAndEveryDuplicateOpaqueId()
     FakeWatcher watcher;
     ProfileCatalog catalog(repository, watcher);
 
-    const QList<ProfileRecord> records =
-        requireRecords(catalog.records(makeInstance(QStringLiteral("native:one"))));
+    const RemminaInstance instance = makeInstance(QStringLiteral("native:one"));
+    const QList<ProfileRecord> records = requireRecords(catalog.records(instance));
 
     QCOMPARE(records.size(), 1);
     QCOMPARE(records.constFirst().opaqueId, QStringLiteral("unique"));
-    QVERIFY(catalog.resolve(u"duplicate") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"duplicate"));
     QCOMPARE(watcher.paths, QStringList{QStringLiteral("/profiles/one")});
 }
 
@@ -848,18 +848,19 @@ void ProfileCatalogTest::resolveRejectsRemovedAndRetargetedSourceWithoutLoading(
     const QList<ProfileRecord> removableRecords = requireRecords(catalog.records(instance));
     const QString removableId = removableRecords.constFirst().opaqueId;
     QCOMPARE(repository.calls.size(), 2);
-    QVERIFY(catalog.resolve(QStringView(removableId)) != nullptr);
+    QVERIFY(!catalog.resolve(u"native:different-instance", QStringView(removableId)));
+    QVERIFY(catalog.resolve(QStringView(instance.id), QStringView(removableId)).has_value());
     QVERIFY(QFile::remove(removable));
-    QVERIFY(catalog.resolve(QStringView(removableId)) == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), QStringView(removableId)));
     QCOMPARE(repository.calls.size(), 2);
 
     catalog.markDirty();
     const QList<ProfileRecord> aliasedRecords = requireRecords(catalog.records(instance));
     const QString aliasId = aliasedRecords.constFirst().opaqueId;
-    QVERIFY(catalog.resolve(QStringView(aliasId)) != nullptr);
+    QVERIFY(catalog.resolve(QStringView(instance.id), QStringView(aliasId)).has_value());
     QVERIFY(QFile::remove(alias));
     QVERIFY(QFile::link(secondTarget, alias));
-    QVERIFY(catalog.resolve(QStringView(aliasId)) == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), QStringView(aliasId)));
     QCOMPARE(repository.calls.size(), 4);
 }
 
@@ -885,10 +886,10 @@ void ProfileCatalogTest::resolveRejectsRetargetedDirectoryWithoutLoading()
 
     const QList<ProfileRecord> records = requireRecords(catalog.records(instance));
     const QString opaqueId = records.constFirst().opaqueId;
-    QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+    QVERIFY(catalog.resolve(QStringView(instance.id), QStringView(opaqueId)).has_value());
     QVERIFY(QFile::remove(current));
     QVERIFY(QFile::link(QDir(root).filePath(QStringLiteral("43")), current));
-    QVERIFY(catalog.resolve(QStringView(opaqueId)) == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), QStringView(opaqueId)));
     QCOMPARE(repository.calls.size(), 2);
 }
 
@@ -912,7 +913,7 @@ void ProfileCatalogTest::initialRepositoryExceptionLeavesRefreshRetryable()
 
     QVERIFY(threw);
     QCOMPARE(repository.calls.size(), 1);
-    QVERIFY(catalog.resolve(u"recovered") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"recovered"));
     const QList<ProfileRecord> recovered = requireRecords(catalog.records(instance));
     QCOMPARE(recovered.size(), 1);
     QCOMPARE(recovered.constFirst().opaqueId, QStringLiteral("recovered"));
@@ -934,7 +935,7 @@ void ProfileCatalogTest::repositoryExceptionAfterCleanSnapshotInvalidatesIt()
     ProfileCatalog catalog(repository, watcher);
     const QList<ProfileRecord> initial = requireRecords(catalog.records(instance));
     const QString opaqueId = initial.constFirst().opaqueId;
-    QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+    QVERIFY(catalog.resolve(QStringView(instance.id), QStringView(opaqueId)).has_value());
     catalog.endSession();
     repository.throwOnCalls = {4};
 
@@ -948,10 +949,10 @@ void ProfileCatalogTest::repositoryExceptionAfterCleanSnapshotInvalidatesIt()
 
     QVERIFY(threw);
     QCOMPARE(repository.calls.size(), 4);
-    QVERIFY(catalog.resolve(QStringView(opaqueId)) == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), QStringView(opaqueId)));
     requireRecords(catalog.records(instance));
     QCOMPARE(repository.calls.size(), 6);
-    QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+    QVERIFY(catalog.resolve(QStringView(instance.id), QStringView(opaqueId)).has_value());
 }
 
 void ProfileCatalogTest::watcherExceptionsLeaveCapturedCallbackInertAndRetryable()
@@ -983,16 +984,16 @@ void ProfileCatalogTest::watcherExceptionsLeaveCapturedCallbackInertAndRetryable
     QVERIFY(threw);
     QCOMPARE(clearCallsAfterThrow, 1);
     QVERIFY(stale);
-    QVERIFY(catalog.resolve(u"anything") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"anything"));
     const QList<ProfileRecord> recovered = requireRecords(catalog.records(instance));
     const QString opaqueId = recovered.constFirst().opaqueId;
     QCOMPARE(repository.calls.size(), 3);
-    QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+    QVERIFY(catalog.resolve(QStringView(instance.id), QStringView(opaqueId)).has_value());
 
     stale();
     requireRecords(catalog.records(instance));
     QCOMPARE(repository.calls.size(), 3);
-    QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+    QVERIFY(catalog.resolve(QStringView(instance.id), QStringView(opaqueId)).has_value());
 }
 
 void ProfileCatalogTest::resetAndDestructorContainWatcherClearExceptions()
@@ -1015,7 +1016,7 @@ void ProfileCatalogTest::resetAndDestructorContainWatcherClearExceptions()
     watcher.clearThrowsRemaining = 0;
 
     QVERIFY(!resetThrew);
-    QVERIFY(catalog.resolve(u"record") == nullptr);
+    QVERIFY(!catalog.resolve(QStringView(instance.id), u"record"));
     QCOMPARE(repository.calls.size(), 2);
 
     const pid_t child = ::fork();
@@ -1117,7 +1118,7 @@ void ProfileCatalogTest::resolveRejectsDirectoryAndFifoReplacementsWithoutLoadin
         ProfileCatalog catalog(repository, watcher);
         const QList<ProfileRecord> loaded = requireRecords(catalog.records(instance));
         const QString opaqueId = loaded.constFirst().opaqueId;
-        QVERIFY(catalog.resolve(QStringView(opaqueId)) != nullptr);
+        QVERIFY(catalog.resolve(QStringView(instance.id), QStringView(opaqueId)).has_value());
         QVERIFY(QFile::remove(source));
         if (replaceWithFifo) {
             const QByteArray encoded = QFile::encodeName(source);
@@ -1126,7 +1127,7 @@ void ProfileCatalogTest::resolveRejectsDirectoryAndFifoReplacementsWithoutLoadin
             QVERIFY(QDir().mkpath(source));
         }
 
-        QVERIFY(catalog.resolve(QStringView(opaqueId)) == nullptr);
+        QVERIFY(!catalog.resolve(QStringView(instance.id), QStringView(opaqueId)));
         QCOMPARE(repository.calls.size(), 2);
     }
 }
